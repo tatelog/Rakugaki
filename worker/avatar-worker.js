@@ -1,65 +1,71 @@
 // ============================================================
-//  X(旧Twitter) アバター取得プロキシ  ―  Cloudflare Worker
+//  X(旧Twitter) アバター取得プロキシ  ―  Cloudflare Worker（改良版）
 // ------------------------------------------------------------
-//  ブラウザから  https://<your>.workers.dev/?u=<アカウント名>
-//  を叩くと、そのアカウントのプロフィール画像を
-//  CORS(Access-Control-Allow-Origin:*)付きで返します。
+//  https://<your>.workers.dev/?u=<アカウント名>      画像を返す
+//  https://<your>.workers.dev/?u=<アカウント名>&debug=1  各取得先の状態をJSONで返す
 //
-//  サーバー側(エッジ)で取得するため、閲覧者の回線が
-//  twimg/unavatar 等をブロックしていても影響を受けません。
-//
-//  デプロイ手順は同じフォルダの README.md を参照。
+//  複数の取得先を順に試し、最初に画像が取れたものを返します。
+//  1つが429(レート制限)でも、別経路で取れれば成功します。
 // ============================================================
 
 const UA = 'Mozilla/5.0 (compatible; RakugakiAvatarBot/1.0)';
+const CORS = { 'Access-Control-Allow-Origin': '*' };
 
-// アカウント名 → 実アバターURL を解決（公式JSON → 失敗時はunavatar）
-async function resolveAvatarUrl(user) {
-  const api = 'https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=' +
-    encodeURIComponent(user);
+// 取得先候補（上から順に試す）
+async function candidates(user) {
+  const u = encodeURIComponent(user);
+  const list = [
+    { name: 'unavatar/twitter', url: 'https://unavatar.io/twitter/' + u + '?fallback=false' },
+    { name: 'unavatar/x',       url: 'https://unavatar.io/x/' + u + '?fallback=false' },
+  ];
+  // X公式JSON → 実アバターURL（pbs.twimg.com）
   try {
-    const r = await fetch(api, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } });
+    const r = await fetch(
+      'https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=' + u,
+      { headers: { 'User-Agent': UA, 'Accept': 'application/json' } }
+    );
     if (r.ok) {
       const j = await r.json();
-      const u = j && j[0] && j[0].profile_image_url_https;
-      if (u) return u.replace('_normal', '_400x400'); // 高解像度版
+      const p = j && j[0] && j[0].profile_image_url_https;
+      if (p) list.push({ name: 'syndication', url: p.replace('_normal', '_400x400') });
     }
-  } catch (_) { /* fall through */ }
-  // フォールバック：unavatar（サーバー側なのでCORSは無関係）
-  return 'https://unavatar.io/twitter/' + encodeURIComponent(user) + '?fallback=false';
-}
-
-function withCors(resp) {
-  const h = new Headers(resp.headers);
-  h.set('Access-Control-Allow-Origin', '*');
-  h.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  return new Response(resp.body, { status: resp.status, headers: h });
+  } catch (_) { /* ignore */ }
+  return list;
 }
 
 export default {
   async fetch(request) {
-    if (request.method === 'OPTIONS') {
-      return withCors(new Response(null, { status: 204 }));
-    }
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(request.url);
     const user = (url.searchParams.get('u') || '').replace(/^@+/, '').trim();
-    if (!user) {
-      return withCors(new Response('usage: ?u=<screen_name>', { status: 400 }));
-    }
-    try {
-      const imgUrl = await resolveAvatarUrl(user);
-      const ir = await fetch(imgUrl, { headers: { 'User-Agent': UA } });
-      if (!ir.ok) {
-        return withCors(new Response('avatar fetch failed: ' + ir.status, { status: 502 }));
+    const debug = url.searchParams.get('debug');
+    if (!user) return new Response('usage: ?u=<screen_name>', { status: 400, headers: CORS });
+
+    const cands = await candidates(user);
+    const report = [];
+    for (const c of cands) {
+      try {
+        const ir = await fetch(c.url, { headers: { 'User-Agent': UA } });
+        const type = ir.headers.get('content-type') || '';
+        report.push({ source: c.name, status: ir.status, type });
+        if (ir.ok && type.startsWith('image/')) {
+          if (debug) continue; // debug時は全経路の状態を集める
+          const buf = await ir.arrayBuffer();
+          return new Response(buf, { status: 200, headers: {
+            'Content-Type': type || 'image/jpeg',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, max-age=86400'
+          }});
+        }
+      } catch (e) {
+        report.push({ source: c.name, error: String((e && e.message) || e) });
       }
-      const buf = await ir.arrayBuffer();
-      const headers = new Headers();
-      headers.set('Content-Type', ir.headers.get('content-type') || 'image/jpeg');
-      headers.set('Access-Control-Allow-Origin', '*');
-      headers.set('Cache-Control', 'public, max-age=3600'); // 1時間キャッシュ
-      return new Response(buf, { status: 200, headers });
-    } catch (e) {
-      return withCors(new Response('error: ' + (e && e.message || e), { status: 500 }));
     }
+    if (debug) {
+      return new Response(JSON.stringify({ user, report }, null, 2),
+        { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } });
+    }
+    return new Response('all sources failed: ' + JSON.stringify(report),
+      { status: 502, headers: CORS });
   }
 };
