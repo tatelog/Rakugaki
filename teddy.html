@@ -1,0 +1,255 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ラクガキ 3D化モック（Teddy風インフレーション）</title>
+<style>
+  :root{ --ink:#2b2622; --paper:#fdf7ea; --paper2:#f3e9d2; --red:#e0533d; --line:#2b2622; }
+  *{box-sizing:border-box}
+  body{margin:0; padding:22px 16px 60px; color:var(--ink);
+    font-family:"Comic Sans MS","Chalkboard SE","Yu Gothic",system-ui,sans-serif;
+    background:var(--paper);
+    background-image:repeating-linear-gradient(0deg,transparent 0 27px,rgba(43,38,34,.045) 27px 28px);}
+  .wrap{max-width:760px; margin:0 auto}
+  h1{font-size:clamp(20px,4.5vw,30px); transform:rotate(-1deg); margin:0 0 2px}
+  .sub{font-size:.45em; letter-spacing:3px; opacity:.6}
+  .tag{opacity:.65; font-size:13px; margin:0 0 18px}
+  a.back{color:var(--red); font-weight:bold}
+  .card{background:var(--paper); border:3px solid var(--line); border-radius:14px 12px 15px 11px/12px 15px 11px 14px;
+    box-shadow:3px 4px 0 rgba(43,38,34,.18); padding:16px; margin-bottom:16px}
+  .drop{border:3px dashed var(--line); border-radius:12px; min-height:150px; display:flex; align-items:center; justify-content:center;
+    text-align:center; cursor:pointer; background:var(--paper2); overflow:hidden; padding:14px}
+  .drop.hot{background:#e5f0d8; border-color:#4caa5a}
+  .drop .hint{font-size:13px; opacity:.7; line-height:1.6}
+  .row{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center}
+  button{font-family:inherit; cursor:pointer; border:2.5px solid var(--line); background:var(--paper); color:var(--ink);
+    border-radius:10px 9px 11px 8px; padding:8px 12px; font-size:14px; box-shadow:2px 2px 0 rgba(43,38,34,.2)}
+  button:hover{transform:translate(-1px,-1px)} button:active{transform:translate(1px,1px)}
+  button.on{background:var(--red); color:#fff}
+  label.ctl{font-size:13px; display:flex; align-items:center; gap:6px}
+  input[type=range]{accent-color:var(--red)}
+  .stage{display:flex; gap:18px; flex-wrap:wrap; align-items:center; justify-content:center; margin-top:6px}
+  .stageBox{position:relative}
+  canvas{image-rendering:auto; border-radius:12px}
+  .cap{font-size:11px; opacity:.6; text-align:center; margin-top:4px}
+  .why{font-size:12px; opacity:.7; line-height:1.7; margin-top:4px}
+  .why b{color:var(--red)}
+  .canv{display:none}
+</style>
+
+<div class="wrap">
+  <h1>ラクガキ 3D化モック<span class="sub"> TEDDY-STYLE INFLATION</span></h1>
+  <p class="tag">五十嵐健夫「Teddy」(SIGGRAPH'99) の核心 —— <b>シルエットからの距離を"高さ"に変換して膨らませる</b> —— を画像に適用したモックです。 <a class="back" href="./index.html">← バトルへ戻る</a></p>
+
+  <div class="card">
+    <div class="drop" id="drop">
+      <img id="preview" alt="" style="max-width:100%; max-height:220px; display:none; border-radius:10px">
+      <div class="hint" id="hint">画像をドロップ / クリックで選択<br>または <b>Ctrl/Cmd+V で貼り付け</b><br><small>（SNSサムネ・アイコン・スクショ）</small></div>
+    </div>
+    <div class="row">
+      <button id="pick">📁 画像を選ぶ</button>
+      <button id="rand">🎲 サンプル</button>
+      <span style="flex:1"></span>
+    </div>
+    <div class="row">
+      <span style="font-size:13px">シルエット:</span>
+      <button class="mode on" data-mode="auto">自動(背景除去)</button>
+      <button class="mode" data-mode="ellipse">まる</button>
+      <button class="mode" data-mode="rect">しかく</button>
+    </div>
+    <div class="row">
+      <label class="ctl">膨らみ <input id="puff" type="range" min="0.3" max="1.8" step="0.05" value="1"></label>
+      <label class="ctl"><input id="spin" type="checkbox" checked> ライトを回す</label>
+      <label class="ctl"><input id="bob" type="checkbox" checked> ぷるぷる</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stage">
+      <div class="stageBox"><canvas id="out" width="260" height="260"></canvas><div class="cap">3D化オブジェクト</div></div>
+      <div class="stageBox"><canvas id="height" width="130" height="130"></canvas><div class="cap">高さマップ（明=高い）</div></div>
+    </div>
+    <p class="why">仕組み：画像から<b>シルエット（マスク）</b>を作り → 各点の<b>輪郭までの距離</b>を距離変換で求め → その距離を<b>高さ</b>に変換（h≈√(d·(2D−d))で半球状に）→ 高さの勾配から<b>法線</b>を出して陰影付け。Teddyが2Dストロークを3D化した発想を、そのまま画像に当てています。<br>※モックなので背景除去は簡易（四隅の色を背景と推定）。真っ当にやるなら被写体セグメンテーション＋実メッシュ化になります。</p>
+  </div>
+</div>
+
+<canvas class="canv" id="work"></canvas>
+<input type="file" id="file" accept="image/*" style="display:none">
+
+<script>
+const P=200;                 // 処理解像度（正方）
+const work=document.getElementById('work'); work.width=work.height=P;
+const wx=work.getContext('2d',{willReadFrequently:true});
+const out=document.getElementById('out'), octx=out.getContext('2d');
+const hcv=document.getElementById('height'), hctx=hcv.getContext('2d');
+let mode='auto', srcImg=null;
+let baked=null;              // {tex, mask, nx,ny,nz, W,H, ox,oy,ow,oh}
+
+// ---- 画像読み込み ----
+function loadImage(src){
+  const img=new Image();
+  img.onload=()=>{ srcImg=img;
+    document.getElementById('preview').src=src;
+    document.getElementById('preview').style.display='block';
+    document.getElementById('hint').style.display='none';
+    bake();
+  };
+  img.onerror=()=>alert('画像を読めませんでした。');
+  img.src=src;
+}
+function fileToImg(f){ if(!f||!f.type.startsWith('image/'))return; const r=new FileReader(); r.onload=e=>loadImage(e.target.result); r.readAsDataURL(f); }
+
+// ---- シルエット（マスク）作成 ----
+function buildMask(d,W,H){
+  const m=new Uint8Array(W*H);
+  const cx=(W-1)/2, cy=(H-1)/2, rx=W*0.46, ry=H*0.46;
+  if(mode==='rect'){
+    const mg=Math.round(W*0.06);
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++) m[y*W+x]=(x>=mg&&x<W-mg&&y>=mg&&y<H-mg)?1:0;
+    return m;
+  }
+  if(mode==='ellipse'){
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const nx=(x-cx)/rx,ny=(y-cy)/ry; m[y*W+x]=(nx*nx+ny*ny<=1)?1:0;}
+    return m;
+  }
+  // auto: 四隅の平均を背景色とみなし、離れた画素を被写体に
+  const corners=[[0,0],[W-1,0],[0,H-1],[W-1,H-1]]; let br=0,bg=0,bb=0;
+  for(const [x,y] of corners){const i=(y*W+x)*4; br+=d[i];bg+=d[i+1];bb+=d[i+2];}
+  br/=4;bg/=4;bb/=4;
+  let cnt=0;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const i=(y*W+x)*4; const dist=Math.abs(d[i]-br)+Math.abs(d[i+1]-bg)+Math.abs(d[i+2]-bb);
+    const on=dist>70?1:0; m[y*W+x]=on; cnt+=on;
+  }
+  const frac=cnt/(W*H);
+  if(frac<0.05||frac>0.92){ // 背景除去が破綻 → 楕円にフォールバック
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const nx=(x-cx)/rx,ny=(y-cy)/ry; m[y*W+x]=(nx*nx+ny*ny<=1)?1:0;}
+  }
+  return m;
+}
+
+// ---- 距離変換（2パス・チャンファ 1,√2）----
+function distanceTransform(m,W,H){
+  const INF=1e9, d=new Float32Array(W*H);
+  for(let i=0;i<W*H;i++) d[i]=m[i]?INF:0;
+  const at=(x,y)=> (x<0||y<0||x>=W||y>=H)?0:d[y*W+x];
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){ if(!m[y*W+x])continue;
+    let v=d[y*W+x];
+    v=Math.min(v, at(x-1,y)+1, at(x,y-1)+1, at(x-1,y-1)+1.41421, at(x+1,y-1)+1.41421);
+    d[y*W+x]=v;
+  }
+  for(let y=H-1;y>=0;y--)for(let x=W-1;x>=0;x--){ if(!m[y*W+x])continue;
+    let v=d[y*W+x];
+    v=Math.min(v, at(x+1,y)+1, at(x,y+1)+1, at(x+1,y+1)+1.41421, at(x-1,y+1)+1.41421);
+    d[y*W+x]=v;
+  }
+  return d;
+}
+
+// ---- 距離→高さ→法線 を事前計算 ----
+function bake(){
+  if(!srcImg) return;
+  // 画像を正方Pにアスペクト維持で中央配置
+  wx.clearRect(0,0,P,P);
+  const s=Math.min(P/srcImg.width, P/srcImg.height);
+  const ow=srcImg.width*s, oh=srcImg.height*s, ox=(P-ow)/2, oy=(P-oh)/2;
+  wx.drawImage(srcImg, ox,oy, ow,oh);
+  const img=wx.getImageData(0,0,P,P), d=img.data;
+  const mask=buildMask(d,P,P);
+  const dist=distanceTransform(mask,P,P);
+  let maxD=0; for(let i=0;i<P*P;i++) if(dist[i]>maxD)maxD=dist[i];
+  maxD=Math.max(1,maxD);
+  const puff=+document.getElementById('puff').value;
+  const hgt=new Float32Array(P*P);
+  for(let i=0;i<P*P;i++){ const dd=dist[i]; hgt[i]= dd>0 ? Math.sqrt(Math.max(0, dd*(2*maxD-dd)))*puff : 0; }
+  // 法線
+  const nx=new Float32Array(P*P), ny=new Float32Array(P*P), nz=new Float32Array(P*P);
+  const H=(x,y)=> (x<0||y<0||x>=P||y>=P)?0:hgt[y*P+x];
+  for(let y=0;y<P;y++)for(let x=0;x<P;x++){
+    const i=y*P+x;
+    if(!mask[i]){ nz[i]=0; continue; }
+    const gx=H(x+1,y)-H(x-1,y), gy=H(x+1,y-0)*0+ (H(x,y+1)-H(x,y-1));
+    let vx=-gx, vy=-gy, vz=2.2, l=Math.hypot(vx,vy,vz)||1;
+    nx[i]=vx/l; ny[i]=vy/l; nz[i]=vz/l;
+  }
+  baked={tex:d, mask, nx,ny,nz, hgt, maxD};
+  drawHeight(hgt,mask,maxD);
+  render(0);
+}
+
+function drawHeight(hgt,mask,maxD){
+  const im=hctx.createImageData(P,P);
+  for(let i=0;i<P*P;i++){ const v=mask[i]? Math.round(hgt[i]/(maxD*1.2)*255):0;
+    im.data[i*4]=v; im.data[i*4+1]=v; im.data[i*4+2]=v; im.data[i*4+3]=255; }
+  // Pをheightキャンバス(130)へ縮小描画
+  const tmp=document.createElement('canvas'); tmp.width=tmp.height=P; tmp.getContext('2d').putImageData(im,0,0);
+  hctx.clearRect(0,0,130,130); hctx.imageSmoothingEnabled=true; hctx.drawImage(tmp,0,0,130,130);
+}
+
+// ---- 陰影レンダリング（毎フレーム：回るライト＋ぷるぷる）----
+let t0=0;
+function render(t){
+  if(!baked) return;
+  const {tex,mask,nx,ny,nz}=baked;
+  const ang = document.getElementById('spin').checked ? t*0.0012 : 0.6;
+  const Lx=Math.cos(ang)*0.6, Ly=-0.5, Lz=0.62; const Ll=Math.hypot(Lx,Ly,Lz);
+  const lx=Lx/Ll, ly=Ly/Ll, lz=Lz/Ll;
+  const im=octx.createImageData(P,P);
+  const o=im.data, amb=0.34;
+  for(let i=0;i<P*P;i++){
+    const j=i*4;
+    if(!mask[i]){ o[j+3]=0; continue; }
+    let diff=nx[i]*lx+ny[i]*ly+nz[i]*lz; if(diff<0)diff=0;
+    // スペキュラ（軽い光沢）
+    const spec=Math.pow(diff,18)*0.5;
+    const sh=amb+diff*0.9;
+    o[j]  =Math.min(255, tex[j]  *sh + spec*255);
+    o[j+1]=Math.min(255, tex[j+1]*sh + spec*255);
+    o[j+2]=Math.min(255, tex[j+2]*sh + spec*255);
+    o[j+3]=255;
+  }
+  // 元Pをoutキャンバスへ（影＋ぷるぷる）
+  const tmp=document.createElement('canvas'); tmp.width=tmp.height=P; tmp.getContext('2d').putImageData(im,0,0);
+  octx.clearRect(0,0,260,260);
+  const bobOn=document.getElementById('bob').checked;
+  const bob = bobOn ? Math.sin(t*0.004)*5 : 0;
+  const sq  = bobOn ? 1+Math.sin(t*0.004)*0.02 : 1;
+  // 影
+  octx.save(); octx.globalAlpha=.18; octx.fillStyle='#000';
+  octx.beginPath(); octx.ellipse(130,232,72,14,0,0,7); octx.fill(); octx.restore();
+  // 本体
+  const W=250*sq, Hh=250/sq, x=(260-W)/2, y=(260-Hh)/2 + bob;
+  octx.imageSmoothingEnabled=true; octx.drawImage(tmp,x,y,W,Hh);
+}
+
+function loop(t){ if(!t0)t0=t; render(t); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+// ---- サンプル画像 ----
+function sample(){
+  const c=document.createElement('canvas'); c.width=c.height=200; const g=c.getContext('2d');
+  g.fillStyle='#f2ead6'; g.fillRect(0,0,200,200);                 // 背景（除去対象）
+  const hue=Math.floor(Math.random()*360);
+  g.fillStyle=`hsl(${hue},70%,55%)`; g.beginPath(); g.arc(100,105,64,0,7); g.fill();
+  g.fillStyle=`hsl(${(hue+40)%360},70%,45%)`; g.beginPath(); g.arc(78,90,14,0,7); g.arc(122,90,14,0,7); g.fill();
+  g.fillStyle='#fff'; g.beginPath(); g.arc(78,90,5,0,7); g.arc(122,90,5,0,7); g.fill();
+  loadImage(c.toDataURL());
+}
+
+// ---- events ----
+const drop=document.getElementById('drop');
+drop.addEventListener('click',()=>document.getElementById('file').click());
+drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('hot');});
+drop.addEventListener('dragleave',()=>drop.classList.remove('hot'));
+drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('hot');fileToImg(e.dataTransfer.files[0]);});
+document.getElementById('pick').onclick=()=>document.getElementById('file').click();
+document.getElementById('file').addEventListener('change',e=>{fileToImg(e.target.files[0]); e.target.value='';});
+document.getElementById('rand').onclick=sample;
+document.addEventListener('paste',e=>{const it=(e.clipboardData||{}).items; if(!it)return;
+  for(const x of it){ if(x.type&&x.type.startsWith('image/')){ fileToImg(x.getAsFile()); e.preventDefault(); return; } }});
+document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.mode').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  mode=b.dataset.mode; bake();
+});
+document.getElementById('puff').addEventListener('input',bake);
+
+sample();  // 初期表示
+</script>
