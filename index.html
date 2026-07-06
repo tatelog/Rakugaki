@@ -143,14 +143,32 @@
   /* CPUプリセット */
   .presets{display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px}
   .presets .plabel{font-size:11px; opacity:.7; width:100%; margin-bottom:2px}
-  .presets canvas{width:42px; height:42px; border:2.5px solid var(--line); border-radius:9px;
-    cursor:pointer; box-shadow:1px 1px 0 rgba(43,38,34,.2)}
-  .presets canvas:hover{transform:translate(-1px,-1px)}
+  .presets canvas, .presets img{width:44px; height:44px; object-fit:cover; border:2.5px solid var(--line);
+    border-radius:9px; cursor:pointer; box-shadow:1px 1px 0 rgba(43,38,34,.2); background:var(--paper2)}
+  .presets canvas:hover, .presets img:hover{transform:translate(-1px,-1px)}
+  /* 取得プロキシ設定 */
+  .proxycfg{max-width:960px; margin:0 auto 14px; font-size:12px; opacity:.85;
+    display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+  .proxycfg input{flex:1; min-width:140px; font-family:inherit; border:2px solid var(--line);
+    border-radius:8px; padding:6px 8px; font-size:13px; background:var(--paper)}
+  .proxycfg button{padding:6px 10px; font-size:13px; flex:none}
+  .proxycfg [data-workerstate]{font-size:11px}
+  /* Xポストボタン */
+  #xpost{flex:none; background:#0f1419; color:#fff; border-color:#0f1419;
+    padding:12px 24px; font-size:15px; border-radius:10px 9px 11px 8px}
+  #xpost:hover{background:#000}
 </style>
 
 <div class="wrap">
   <h1>SNSラクガキ大戦<span class="sub">RAKUGAKI ARENA</span></h1>
   <p class="tagline">— SNSのサムネ画像が、そのまま戦士になる。色が力、輪郭が速さ。—<br><a href="./teddy.html" style="color:var(--red);font-weight:bold">🧸 3D化モック（Teddy風）を試す →</a></p>
+
+  <div class="proxycfg">
+    <span>🔌 取得プロキシURL（任意）:</span>
+    <input data-worker placeholder="https://xxxx.workers.dev" autocomplete="off" spellcheck="false">
+    <button data-workersave>保存</button>
+    <span data-workerstate></span>
+  </div>
 
   <div class="sketch arena">
     <div class="fighter">
@@ -218,6 +236,12 @@
     <div class="center"><button id="resetBtn" style="flex:none; padding:8px 20px">↩️ もう一度／画像を変える</button></div>
     <p class="why">じゃんけんの3すくみ：✊攻撃 &gt; ✌️魔法 &gt; ✋防御 &gt; ✊攻撃。勝った手の担当ステータスでダメージが決まり、素早さが行動順とにらみ合いを制します。属性（火＞森＞水＞火）で威力±。</p>
   </div>
+
+  <div class="center" style="margin-top:24px">
+    <button id="xpost">𝕏 に結果をポスト</button>
+    <div style="font-size:11px; opacity:.55; margin-top:6px">※画像は添付されません（Xの仕様）。結果テキストとURLを投稿します。</div>
+  </div>
+
   <input type="file" id="filepick" accept="image/*" style="display:none">
   <canvas class="canv" id="cv" width="72" height="72"></canvas>
 </div>
@@ -428,12 +452,15 @@ async function fetchXAvatar(slot){
   btn.textContent='取得中…'; btn.disabled=true;
 
   // 取得経路（上から順に試し、最初に成功したものを採用）
-  const routes=[
+  const routes=[];
+  const wk=getWorker();
+  if(wk) routes.push(['自前Worker', ()=> wk + (wk.includes('?')?'&':'?') + 'u=' + encodeURIComponent(h)]);
+  routes.push(
     ['X公式API', ()=>resolveSyndication(h)],
     ['unavatar/twitter(proxy)', ()=>weserv('unavatar.io/twitter/'+encodeURIComponent(h))],
     ['unavatar/x(proxy)',       ()=>weserv('unavatar.io/x/'+encodeURIComponent(h))],
     ['unavatar/twitter(直)',    ()=>'https://unavatar.io/twitter/'+encodeURIComponent(h)+'?fallback=false'],
-  ];
+  );
   const errs=[];
   for(const [name,getUrl] of routes){
     try{
@@ -481,6 +508,7 @@ document.getElementById('filepick').addEventListener('change',e=>{
 // ============================================================
 const logEl=document.getElementById('log');
 let state=null;
+let lastResult=null;   // Xポスト用の直近の勝敗テキスト
 const ELEM_ADV={fire:'forest',forest:'water',water:'fire'}; // 火>森>水>火
 
 function log(html,cls){const p=document.createElement('p'); if(cls)p.className=cls; p.innerHTML=html; logEl.appendChild(p); logEl.scrollTop=logEl.scrollHeight;}
@@ -582,8 +610,9 @@ function resolve(m0,m1){
     state.over=true; document.getElementById('hands').style.pointerEvents='none';
     const winner = state.u[0].hp>state.u[1].hp ? state.u[0] : state.u[1];
     const loser = winner===state.u[0]?state.u[1]:state.u[0];
-    if(state.u[0].hp<=0 && state.u[1].hp<=0) log('💥 相打ち！引き分け！','win');
-    else log(`🏆 ${winner.tag}（ランク${winner.rank}・${ELEM_JP[winner.elem]}）の勝利！`,'win');
+    if(state.u[0].hp<=0 && state.u[1].hp<=0){ log('💥 相打ち！引き分け！','win'); lastResult='相打ちで引き分け！'; }
+    else { log(`🏆 ${winner.tag}（ランク${winner.rank}・${ELEM_JP[winner.elem]}）の勝利！`,'win');
+           lastResult=`${winner.tag}（ランク${winner.rank}・${ELEM_JP[winner.elem]}属性）が勝利！`; }
   }
 }
 
@@ -681,39 +710,46 @@ requestAnimationFrame(battleLoop);
 // ============================================================
 //  CPUプリセット（内蔵キャラ・タップでP2にセット）
 // ============================================================
-function pmon(body,accent,extra){
-  const c=document.createElement('canvas'); c.width=c.height=120; const g=c.getContext('2d');
-  g.fillStyle='#f2ead6'; g.fillRect(0,0,120,120);            // 単色背景→自動でシルエット化
-  if(extra==='rainbow'){
-    for(let k=0;k<6;k++){ g.fillStyle=`hsl(${k*60},75%,55%)`;
-      g.beginPath(); g.moveTo(60,66); g.arc(60,66,42,k*Math.PI/3,(k+1)*Math.PI/3); g.closePath(); g.fill(); }
-  }else if(extra==='stripe'){
-    g.save(); g.beginPath(); g.arc(60,66,42,0,7); g.clip();
-    for(let x=18;x<102;x+=9){ g.fillStyle=((x/9)|0)%2?'#151515':'#ededed'; g.fillRect(x,20,9,92);} g.restore();
-  }else{
-    g.fillStyle=body; g.beginPath(); g.arc(60,66,42,0,7); g.fill();
-    g.fillStyle=accent; g.beginPath(); g.arc(60,30,16,0,7); g.fill();
-  }
-  g.fillStyle='#fff'; g.beginPath(); g.arc(47,60,9,0,7); g.arc(73,60,9,0,7); g.fill();
-  g.fillStyle='#2b2622'; g.beginPath(); g.arc(47,61,4.5,0,7); g.arc(73,61,4.5,0,7); g.fill();
-  return c;
-}
 const PRESETS=[
-  {name:'紅蓮', c:()=>pmon('#e0533d','#b5231a')},
-  {name:'蒼海', c:()=>pmon('#3d78e0','#2a54a8')},
-  {name:'森羅', c:()=>pmon('#4caa5a','#2f7d3c')},
-  {name:'黄金', c:()=>pmon('#e0a63d','#c07f1f')},
-  {name:'虹彩', c:()=>pmon(null,null,'rainbow')},
-  {name:'電磁', c:()=>pmon(null,null,'stripe')},
+  {name:'エビっ',   src:'cpu/ebi.png'},
+  {name:'GMK',      src:'cpu/gmk.png'},
+  {name:'ぶちギレ', src:'cpu/gire.png'},
 ];
 (function buildPresets(){
   const wrap=document.querySelector('[data-presets]'); if(!wrap) return;
   const lab=document.createElement('span'); lab.className='plabel'; lab.textContent='CPUプリセット（タップでP2にセット）:'; wrap.appendChild(lab);
-  PRESETS.forEach(p=>{ const c=p.c(); c.title=p.name;
-    c.addEventListener('click',()=>loadImage(1, c.toDataURL()));
-    wrap.appendChild(c);
+  PRESETS.forEach(p=>{
+    const im=document.createElement('img'); im.src=p.src; im.alt=p.name; im.title=p.name;
+    im.addEventListener('click',()=>loadImage(1, p.src));   // 同一オリジンなので解析OK
+    wrap.appendChild(im);
   });
 })();
+
+// ---- 取得プロキシ(Cloudflare Worker)URL の保存/読込 ----
+const WK_KEY='rakugaki_worker';
+function getWorker(){ try{ return (localStorage.getItem(WK_KEY)||'').trim(); }catch(e){ return ''; } }
+(function initWorkerCfg(){
+  const inp=document.querySelector('[data-worker]'), st=document.querySelector('[data-workerstate]');
+  const show=()=>{ const v=getWorker(); st.textContent=v?'✅ 使用中':'（未設定）'; st.style.color=v?'#4caa5a':''; };
+  inp.value=getWorker(); show();
+  document.querySelector('[data-workersave]').onclick=()=>{
+    const v=(inp.value||'').trim();
+    try{ v?localStorage.setItem(WK_KEY,v):localStorage.removeItem(WK_KEY); }catch(e){}
+    show();
+  };
+})();
+
+// ---- Xに結果をポスト（Web Intent）----
+document.getElementById('xpost').onclick=()=>{
+  const base='「SNSラクガキ大戦」';
+  const body = lastResult
+    ? `${base}で ${lastResult}`
+    : `${base}で遊んでる！SNSのサムネがそのまま戦士になるバトル⚔️`;
+  const text = body + ' #ラクガキ大戦';
+  const url = location.href.split('#')[0];
+  const intent = 'https://x.com/intent/post?text='+encodeURIComponent(text)+'&url='+encodeURIComponent(url);
+  window.open(intent,'_blank','noopener');
+};
 
 // 起動時：記憶済みのCPU(P2)画像があれば自動セット
 restoreCpu();
