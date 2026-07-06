@@ -1,0 +1,402 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SNSラクガキ大戦 / RAKUGAKI ARENA</title>
+<style>
+  :root{
+    --ink:#2b2622; --paper:#fdf7ea; --paper2:#f3e9d2;
+    --red:#e0533d; --blue:#3d78e0; --green:#4caa5a; --gold:#e0a63d;
+    --line:#2b2622;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:24px 16px 64px;
+    font-family:"Comic Sans MS","Chalkboard SE","Yu Gothic",system-ui,sans-serif;
+    color:var(--ink);
+    background:var(--paper);
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(224,166,61,.10), transparent 40%),
+      radial-gradient(circle at 80% 90%, rgba(61,120,224,.08), transparent 45%),
+      repeating-linear-gradient(0deg, transparent 0 27px, rgba(43,38,34,.045) 27px 28px);
+  }
+  h1{
+    text-align:center; margin:0 0 4px; font-size:clamp(24px,5vw,40px);
+    letter-spacing:1px; transform:rotate(-1deg);
+  }
+  h1 .sub{display:block; font-size:.4em; letter-spacing:4px; opacity:.6; transform:rotate(1deg)}
+  .tagline{text-align:center; opacity:.6; margin:0 0 22px; font-size:13px}
+  .wrap{max-width:960px; margin:0 auto}
+  .sketch{
+    background:var(--paper); border:3px solid var(--line);
+    border-radius:14px 12px 15px 11px/12px 15px 11px 14px;
+    box-shadow:3px 4px 0 rgba(43,38,34,.18);
+  }
+  /* ---- fighter setup ---- */
+  .arena{display:grid; grid-template-columns:1fr auto 1fr; gap:14px; align-items:stretch}
+  @media(max-width:720px){ .arena{grid-template-columns:1fr; } .vs{transform:rotate(0)} }
+  .fighter{padding:14px}
+  .fighter h2{margin:0 0 10px; font-size:18px; display:flex; align-items:center; gap:8px}
+  .drop{
+    border:3px dashed var(--line); border-radius:12px; aspect-ratio:1/1;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; cursor:pointer; overflow:hidden; position:relative;
+    background:var(--paper2); transition:.15s;
+  }
+  .drop:hover{background:#ece0c4}
+  .drop.hot{background:#e5f0d8; border-color:var(--green)}
+  .drop img{width:100%; height:100%; object-fit:cover; display:none}
+  .drop.filled img{display:block}
+  .drop .hint{padding:12px; font-size:13px; opacity:.7; line-height:1.5}
+  .drop.filled .hint{display:none}
+  .row{display:flex; gap:8px; margin-top:10px}
+  button{
+    font-family:inherit; cursor:pointer; border:2.5px solid var(--line);
+    background:var(--paper); color:var(--ink); border-radius:10px 9px 11px 8px;
+    padding:8px 12px; font-size:14px; box-shadow:2px 2px 0 rgba(43,38,34,.2);
+    transition:.1s; flex:1;
+  }
+  button:hover{transform:translate(-1px,-1px); box-shadow:3px 3px 0 rgba(43,38,34,.25)}
+  button:active{transform:translate(1px,1px); box-shadow:1px 1px 0 rgba(43,38,34,.2)}
+  button:disabled{opacity:.4; cursor:not-allowed; transform:none; box-shadow:none}
+  button.primary{background:var(--gold)}
+  .vs{
+    display:flex; align-items:center; justify-content:center; font-size:34px;
+    font-weight:bold; transform:rotate(-8deg); color:var(--red);
+    text-shadow:2px 2px 0 var(--paper2);
+  }
+  /* ---- stat card ---- */
+  .stats{margin-top:12px; display:none}
+  .stats.show{display:block}
+  .name-line{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px}
+  .rank{font-weight:bold; font-size:20px}
+  .elem{font-size:13px; padding:2px 8px; border:2px solid var(--line); border-radius:20px}
+  .elem.fire{background:#fbe3dc} .elem.water{background:#dce7fb} .elem.forest{background:#dcf3e0}
+  .stat{display:grid; grid-template-columns:64px 1fr 46px; align-items:center; gap:6px; font-size:12px; margin:3px 0}
+  .bar{height:12px; background:var(--paper2); border:2px solid var(--line); border-radius:8px; overflow:hidden}
+  .bar > span{display:block; height:100%}
+  .b-hp>span{background:var(--gold)} .b-atk>span{background:var(--red)}
+  .b-mag>span{background:var(--blue)} .b-def>span{background:var(--green)}
+  .b-spd>span{background:#9b6ad8} .b-crt>span{background:#e07ab0}
+  .val{text-align:right; font-weight:bold}
+  /* ---- battle ---- */
+  #battle{display:none; padding:16px; margin-top:22px}
+  #battle.show{display:block}
+  .bfield{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px}
+  .bunit{text-align:center}
+  .bunit img{width:96px; height:96px; object-fit:cover; border:3px solid var(--line); border-radius:12px}
+  .bunit .bname{font-weight:bold; margin:6px 0 4px}
+  .hpbar{height:16px; background:var(--paper2); border:2.5px solid var(--line); border-radius:10px; overflow:hidden}
+  .hpbar>span{display:block; height:100%; background:var(--green); transition:width .35s, background .35s}
+  .hptxt{font-size:12px; margin-top:2px}
+  .hands{display:flex; gap:10px; justify-content:center; margin:14px 0}
+  .hand{font-size:15px; padding:12px 8px; min-width:96px; flex:none}
+  .hand small{display:block; opacity:.65; font-size:11px; margin-top:2px}
+  #log{
+    background:var(--paper2); border:2.5px solid var(--line); border-radius:10px;
+    padding:10px 12px; height:150px; overflow-y:auto; font-size:13px; line-height:1.6;
+  }
+  #log p{margin:0 0 3px} #log .hit{color:var(--red); font-weight:bold}
+  #log .crit{color:#b5179e; font-weight:bold} #log .heal{color:var(--green); font-weight:bold}
+  #log .win{font-size:16px; font-weight:bold; text-align:center; margin:6px 0}
+  .center{text-align:center; margin-top:16px}
+  .why{font-size:11px; opacity:.55; margin-top:8px; line-height:1.5}
+  .canv{display:none}
+</style>
+
+<div class="wrap">
+  <h1>SNSラクガキ大戦<span class="sub">RAKUGAKI ARENA</span></h1>
+  <p class="tagline">— SNSのサムネ画像が、そのまま戦士になる。色が力、輪郭が速さ。—</p>
+
+  <div class="sketch arena">
+    <div class="fighter">
+      <h2>🅿️ プレイヤー1</h2>
+      <div class="drop" data-slot="0">
+        <img alt="">
+        <div class="hint">画像をドロップ<br>またはクリックで選択<br><small>（SNSサムネ / スクショ等）</small></div>
+      </div>
+      <div class="row">
+        <button data-pick="0">📁 画像を選ぶ</button>
+        <button data-rand="0">🎲 ランダム</button>
+      </div>
+      <div class="stats" data-stats="0"></div>
+    </div>
+
+    <div class="vs">VS</div>
+
+    <div class="fighter">
+      <h2>🅿️ プレイヤー2 / CPU</h2>
+      <div class="drop" data-slot="1">
+        <img alt="">
+        <div class="hint">画像をドロップ<br>またはクリックで選択<br><small>（SNSサムネ / スクショ等）</small></div>
+      </div>
+      <div class="row">
+        <button data-pick="1">📁 画像を選ぶ</button>
+        <button data-rand="1">🎲 ランダム</button>
+      </div>
+      <div class="stats" data-stats="1"></div>
+    </div>
+  </div>
+
+  <div class="center">
+    <button id="startBtn" class="primary" style="flex:none; padding:12px 28px; font-size:17px" disabled>⚔️ バトル開始</button>
+  </div>
+
+  <div class="sketch" id="battle">
+    <div class="bfield">
+      <div class="bunit" data-u="0">
+        <img alt=""><div class="bname"></div>
+        <div class="hpbar"><span></span></div><div class="hptxt"></div>
+      </div>
+      <div class="bunit" data-u="1">
+        <img alt=""><div class="bname"></div>
+        <div class="hpbar"><span></span></div><div class="hptxt"></div>
+      </div>
+    </div>
+    <div class="hands" id="hands">
+      <button class="hand" data-move="gu">✊ 攻撃<small>パワーで殴る</small></button>
+      <button class="hand" data-move="choki">✌️ 魔法<small>魔力で撃つ</small></button>
+      <button class="hand" data-move="pa">✋ 防御<small>守備で守る/回復</small></button>
+    </div>
+    <div id="log"></div>
+    <div class="center"><button id="resetBtn" style="flex:none; padding:8px 20px">↩️ もう一度／画像を変える</button></div>
+    <p class="why">じゃんけんの3すくみ：✊攻撃 &gt; ✌️魔法 &gt; ✋防御 &gt; ✊攻撃。勝った手の担当ステータスでダメージが決まり、素早さが行動順とにらみ合いを制します。属性（火＞森＞水＞火）で威力±。</p>
+  </div>
+  <input type="file" id="filepick" accept="image/*" style="display:none">
+  <canvas class="canv" id="cv" width="72" height="72"></canvas>
+</div>
+
+<script>
+// ============================================================
+//  画像 → ステータス変換エンジン（決定論的：同じ画像＝同じ数値）
+// ============================================================
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', {willReadFrequently:true});
+const N = 72; // 解析解像度
+
+function analyze(img){
+  ctx.clearRect(0,0,N,N);
+  ctx.drawImage(img,0,0,N,N);
+  const d = ctx.getImageData(0,0,N,N).data;
+  let rS=0,gS=0,bS=0, brS=0, brSq=0, satS=0, edge=0, n=N*N;
+  const br = new Float32Array(n);
+  for(let i=0,p=0;i<d.length;i+=4,p++){
+    const r=d[i],g=d[i+1],b=d[i+2];
+    rS+=r; gS+=g; bS+=b;
+    const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+    const bri=(r+g+b)/3; br[p]=bri; brS+=bri; brSq+=bri*bri;
+    satS += mx===0 ? 0 : (mx-mn)/mx;
+  }
+  // 輪郭の複雑さ＝隣接ピクセルの明度差（情報量）
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    const p=y*N+x;
+    if(x<N-1) edge+=Math.abs(br[p]-br[p+1]);
+    if(y<N-1) edge+=Math.abs(br[p]-br[p+N]);
+  }
+  const avgR=rS/n, avgG=gS/n, avgB=bS/n;
+  const avgBr=brS/n;
+  const contrast=Math.sqrt(Math.max(0,brSq/n-avgBr*avgBr));
+  const avgSat=satS/n;
+  const edgeN=Math.min(1, edge/(n*2*70)); // 0..1 正規化
+
+  // ---- ステータス（色＝力 の一対一マッピング）----
+  const HP  = Math.round(200 + avgBr*1.6);          // 明るさ→生命力
+  const ATK = Math.round(40  + avgR*0.90);          // 赤み→パワー
+  const MAG = Math.round(40  + avgB*0.90);          // 青み→魔力
+  const DEF = Math.round(35  + avgG*0.70);          // 緑み→守備
+  const SPD = Math.round(30  + edgeN*220);          // 輪郭→素早さ
+  const CRT = Math.round(Math.min(50, avgSat*62));  // 彩度→クリティカル率%
+
+  // ---- 属性（最も強い色）----
+  let elem='forest';
+  if(avgR>=avgG && avgR>=avgB) elem='fire';
+  else if(avgB>=avgR && avgB>=avgG) elem='water';
+  // ---- ランク ----
+  const total=HP+ATK+MAG+DEF+SPD+CRT*4;
+  const rank = total>900?'S': total>780?'A': total>660?'B': total>540?'C':'D';
+  return {HP,ATK,MAG,DEF,SPD,CRT,elem,rank,contrast:Math.round(contrast)};
+}
+
+// ============================================================
+//  UI：画像の読み込み・ステータス表示
+// ============================================================
+const ELEM_JP={fire:'火',water:'水',forest:'森'};
+const STAT_ROWS=[
+  ['HP','HP','b-hp',700],['パワー','ATK','b-atk',320],['魔力','MAG','b-mag',320],
+  ['守備','DEF','b-def',260],['素早さ','SPD','b-spd',260],['ｸﾘﾃｨｶﾙ','CRT','b-crt',50]
+];
+const fighters=[null,null];   // {img, stats}
+let currentPick=null;
+
+function renderStats(slot){
+  const f=fighters[slot], box=document.querySelector(`[data-stats="${slot}"]`);
+  if(!f){box.classList.remove('show'); return;}
+  const s=f.stats;
+  box.innerHTML =
+    `<div class="name-line"><span class="rank">ランク ${s.rank}</span>
+       <span class="elem ${s.elem}">${ELEM_JP[s.elem]}属性</span></div>` +
+    STAT_ROWS.map(([jp,key,cls,max])=>{
+      const v=s[key], pct=Math.min(100, v/max*100);
+      const disp = key==='CRT' ? v+'%' : v;
+      return `<div class="stat"><span>${jp}</span>
+        <span class="bar ${cls}"><span style="width:${pct}%"></span></span>
+        <span class="val">${disp}</span></div>`;
+    }).join('') +
+    `<div class="why">明るさ→HP / 赤→パワー / 青→魔力 / 緑→守備 / 輪郭の複雑さ→素早さ / 彩度→ｸﾘﾃｨｶﾙ</div>`;
+  box.classList.add('show');
+}
+
+function loadImage(slot, src){
+  const img=new Image();
+  img.onload=()=>{
+    let stats;
+    try{ stats=analyze(img); }
+    catch(e){ alert('画像を解析できませんでした（別ドメインの画像はブラウザ制限で読めない場合があります。ファイルを保存してから選んでください）'); return; }
+    fighters[slot]={img,stats};
+    const drop=document.querySelector(`[data-slot="${slot}"]`);
+    drop.classList.add('filled'); drop.querySelector('img').src=src;
+    renderStats(slot);
+    document.getElementById('startBtn').disabled = !(fighters[0]&&fighters[1]);
+  };
+  img.onerror=()=>alert('画像の読み込みに失敗しました。');
+  img.src=src;
+}
+
+function fileToSlot(slot,file){
+  if(!file||!file.type.startsWith('image/')) return;
+  const rd=new FileReader();
+  rd.onload=e=>loadImage(slot,e.target.result);
+  rd.readAsDataURL(file);
+}
+
+// ランダム画像（画像が手元に無くても試せるテスト用）
+function randomImage(slot){
+  const c=document.createElement('canvas'); c.width=c.height=200;
+  const g=c.getContext('2d');
+  const rc=()=>`hsl(${Math.floor(Math.random()*360)},${40+Math.random()*55|0}%,${30+Math.random()*50|0}%)`;
+  const grd=g.createLinearGradient(0,0,200,200);
+  grd.addColorStop(0,rc()); grd.addColorStop(1,rc());
+  g.fillStyle=grd; g.fillRect(0,0,200,200);
+  for(let i=0;i<8+Math.random()*14;i++){
+    g.fillStyle=rc(); g.globalAlpha=.4+Math.random()*.5;
+    g.beginPath(); g.arc(Math.random()*200,Math.random()*200,10+Math.random()*45,0,7); g.fill();
+  }
+  loadImage(slot,c.toDataURL());
+}
+
+// events: drag & drop / click / file / random
+document.querySelectorAll('.drop').forEach(drop=>{
+  const slot=+drop.dataset.slot;
+  drop.addEventListener('click',()=>{currentPick=slot; document.getElementById('filepick').click();});
+  drop.addEventListener('dragover',e=>{e.preventDefault(); drop.classList.add('hot');});
+  drop.addEventListener('dragleave',()=>drop.classList.remove('hot'));
+  drop.addEventListener('drop',e=>{
+    e.preventDefault(); drop.classList.remove('hot');
+    fileToSlot(slot, e.dataTransfer.files[0]);
+  });
+});
+document.querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>{
+  currentPick=+b.dataset.pick; document.getElementById('filepick').click();
+});
+document.querySelectorAll('[data-rand]').forEach(b=>b.onclick=()=>randomImage(+b.dataset.rand));
+document.getElementById('filepick').addEventListener('change',e=>{
+  if(currentPick!=null) fileToSlot(currentPick,e.target.files[0]);
+  e.target.value='';
+});
+
+// ============================================================
+//  バトル（じゃんけん3すくみ ＋ 属性 ＋ 素早さ ＋ クリティカル）
+// ============================================================
+const logEl=document.getElementById('log');
+let state=null;
+const ELEM_ADV={fire:'forest',forest:'water',water:'fire'}; // 火>森>水>火
+
+function log(html,cls){const p=document.createElement('p'); if(cls)p.className=cls; p.innerHTML=html; logEl.appendChild(p); logEl.scrollTop=logEl.scrollHeight;}
+
+function startBattle(){
+  document.getElementById('battle').classList.add('show');
+  logEl.innerHTML='';
+  const mk=(f,tag)=>({...f.stats, img:f.img.src, hp:f.stats.HP, maxhp:f.stats.HP, tag});
+  state={u:[mk(fighters[0],'P1'), mk(fighters[1],'P2')], over:false};
+  ['0','1'].forEach(i=>{
+    const box=document.querySelector(`.bunit[data-u="${i}"]`), u=state.u[i];
+    box.querySelector('img').src=u.img;
+    box.querySelector('.bname').textContent=`${u.tag}・ランク${u.rank}（${ELEM_JP[u.elem]}）`;
+  });
+  refresh();
+  document.getElementById('hands').style.pointerEvents='auto';
+  log('⚔️ バトル開始！ 手を選べ。','win');
+  document.getElementById('battle').scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function refresh(){
+  state.u.forEach((u,i)=>{
+    const box=document.querySelector(`.bunit[data-u="${i}"]`);
+    const pct=Math.max(0,u.hp/u.maxhp*100);
+    const bar=box.querySelector('.hpbar>span');
+    bar.style.width=pct+'%';
+    bar.style.background = pct>50?'var(--green)':pct>22?'var(--gold)':'var(--red)';
+    box.querySelector('.hptxt').textContent=`HP ${Math.max(0,Math.round(u.hp))} / ${u.maxhp}`;
+  });
+}
+
+const BEATS={gu:'choki',choki:'pa',pa:'gu'};      // 勝ち手→負け手
+const MOVE_JP={gu:'✊攻撃',choki:'✌️魔法',pa:'✋防御'};
+
+// CPUは自分の得意ステータスに応じて手を選ぶ
+function cpuMove(u){
+  const w={gu:u.ATK, choki:u.MAG, pa:u.DEF};
+  const tot=w.gu+w.choki+w.pa; let r=Math.random()*tot;
+  for(const k of ['gu','choki','pa']){ if((r-=w[k])<0) return k; }
+  return 'pa';
+}
+
+function damage(att,def,move){
+  let dmg, kind;
+  if(move==='gu'){ dmg=att.ATK*(0.85+Math.random()*0.35) - def.DEF*0.45; kind='攻撃'; }
+  else if(move==='choki'){ dmg=att.MAG*(0.85+Math.random()*0.35) - def.DEF*0.18; kind='魔法'; }
+  else { // 防御で勝ち＝ガードカウンター＋回復
+    const heal=att.DEF*0.45; att.hp=Math.min(att.maxhp,att.hp+heal);
+    log(`${att.tag} は ✋防御 で受け流し、<span class="heal">${Math.round(heal)} 回復</span>！反撃！`,'');
+    dmg=att.DEF*0.35; kind='反撃';
+  }
+  dmg=Math.max(1,dmg);
+  // 属性補正
+  if(ELEM_ADV[att.elem]===def.elem){ dmg*=1.25; log(`　→ ${ELEM_JP[att.elem]}属性が ${ELEM_JP[def.elem]}属性に有利！`,''); }
+  // クリティカル
+  let crit=false;
+  if(Math.random()*100 < att.CRT){ dmg*=1.7; crit=true; }
+  dmg=Math.round(dmg);
+  def.hp-=dmg;
+  log(`${att.tag} の ${kind}！ ${def.tag} に <span class="${crit?'crit':'hit'}">${dmg} ダメージ</span>${crit?'（クリティカル！）':''}`, '');
+}
+
+function resolve(m0,m1){
+  const [a,b]=state.u;
+  log(`— ${a.tag}:${MOVE_JP[m0]} × ${b.tag}:${MOVE_JP[m1]} —`);
+  if(m0===m1){
+    // にらみ合い：素早い方が小突く
+    const fast = a.SPD>=b.SPD ? a : b, slow = a.SPD>=b.SPD ? b : a;
+    const chip=Math.round(fast.SPD*0.15+2); slow.hp-=chip;
+    log(`にらみ合い…素早い ${fast.tag} が先手で <span class="hit">${chip}</span> 小突く！`,'');
+  }else if(BEATS[m0]===m1){ damage(a,b,m0); }
+  else { damage(b,a,m1); }
+  refresh();
+  // 決着判定
+  const dead=state.u.filter(u=>u.hp<=0);
+  if(dead.length){
+    state.over=true; document.getElementById('hands').style.pointerEvents='none';
+    const winner = state.u[0].hp>state.u[1].hp ? state.u[0] : state.u[1];
+    const loser = winner===state.u[0]?state.u[1]:state.u[0];
+    if(state.u[0].hp<=0 && state.u[1].hp<=0) log('💥 相打ち！引き分け！','win');
+    else log(`🏆 ${winner.tag}（ランク${winner.rank}・${ELEM_JP[winner.elem]}）の勝利！`,'win');
+  }
+}
+
+document.querySelectorAll('.hand').forEach(btn=>{
+  btn.onclick=()=>{ if(!state||state.over) return; resolve(btn.dataset.move, cpuMove(state.u[1])); };
+});
+document.getElementById('startBtn').onclick=startBattle;
+document.getElementById('resetBtn').onclick=()=>{
+  document.getElementById('battle').classList.remove('show'); state=null;
+  window.scrollTo({top:0,behavior:'smooth'});
+};
+</script>
