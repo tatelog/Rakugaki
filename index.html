@@ -118,7 +118,7 @@
       <h2>🅿️ プレイヤー1</h2>
       <div class="drop" data-slot="0">
         <img alt="">
-        <div class="hint">画像をドロップ<br>またはクリックで選択<br><small>（SNSサムネ / スクショ等）</small></div>
+        <div class="hint">画像をドロップ / クリックで選択<br>または <b>Ctrl/Cmd+V で貼り付け</b><br><small>（SNSサムネ / アイコンのスクショ等）</small></div>
       </div>
       <div class="row">
         <button data-pick="0">📁 画像を選ぶ</button>
@@ -138,7 +138,7 @@
       <h2>🅿️ プレイヤー2 / CPU</h2>
       <div class="drop" data-slot="1">
         <img alt="">
-        <div class="hint">画像をドロップ<br>またはクリックで選択<br><small>（SNSサムネ / スクショ等）</small></div>
+        <div class="hint">画像をドロップ / クリックで選択<br>または <b>Ctrl/Cmd+V で貼り付け</b><br><small>（SNSサムネ / アイコンのスクショ等）</small></div>
       </div>
       <div class="row">
         <button data-pick="1">📁 画像を選ぶ</button>
@@ -242,6 +242,7 @@ const STAT_ROWS=[
 ];
 const fighters=[null,null];   // {img, stats}
 let currentPick=null;
+let activeSlot=0;             // ペースト先（最後に触ったスロット）
 
 function renderStats(slot){
   const f=fighters[slot], box=document.querySelector(`[data-stats="${slot}"]`);
@@ -303,7 +304,7 @@ function randomImage(slot){
 // events: drag & drop / click / file / random
 document.querySelectorAll('.drop').forEach(drop=>{
   const slot=+drop.dataset.slot;
-  drop.addEventListener('click',()=>{currentPick=slot; document.getElementById('filepick').click();});
+  drop.addEventListener('click',()=>{currentPick=slot; activeSlot=slot; document.getElementById('filepick').click();});
   drop.addEventListener('dragover',e=>{e.preventDefault(); drop.classList.add('hot');});
   drop.addEventListener('dragleave',()=>drop.classList.remove('hot'));
   drop.addEventListener('drop',e=>{
@@ -325,9 +326,13 @@ function fetchXAvatar(slot){
   btn.textContent='取得中…'; btn.disabled=true;
   // fallback=false: アバターが無ければ既定シルエットではなく失敗を返させる
   const url=`https://unavatar.io/twitter/${encodeURIComponent(handle)}?fallback=false`;
-  const done=ok=>{ btn.textContent='取得'; btn.disabled=false; };
+  let settled=false;
+  const done=()=>{ if(settled) return; settled=true; clearTimeout(timer); btn.textContent='取得'; btn.disabled=false; };
+  // プレビュー画面など外部通信が遮断された環境では onload/onerror が来ないことがある
+  const timer=setTimeout(()=>{ done(); alert('取得の応答がありません。\nこのプレビュー画面や制限環境では外部通信が遮断されているため取得できません。\n\n■ 確実な方法：Xのアイコンをスクショして Ctrl/Cmd+V で貼り付け、\n  または画像を保存してドラッグ／📁で読み込んでください。'); }, 12000);
   const img=new Image(); img.crossOrigin='anonymous';
   img.onload=()=>{
+    if(settled) return;
     try{
       const stats=analyze(img);                       // CORS成功→ピクセル解析OK
       fighters[slot]={img,stats};
@@ -341,15 +346,29 @@ function fetchXAvatar(slot){
     done();
   };
   img.onerror=()=>{
+    if(settled) return;
     done();
     alert('@'+handle+' の画像を取得できませんでした。\n・アカウント名が正しいか\n・非公開/存在しないアカウントでないか\nを確認してください。\n（Xの仕様変更で取得プロキシが一時的に使えない場合もあります。その際は画像を保存してドラッグしてください）');
   };
   img.src=url;
 }
 document.querySelectorAll('[data-xget]').forEach(b=>b.onclick=()=>fetchXAvatar(+b.dataset.xget));
-document.querySelectorAll('[data-xhandle]').forEach(inp=>inp.addEventListener('keydown',e=>{
-  if(e.key==='Enter') fetchXAvatar(+inp.dataset.xhandle);
+document.querySelectorAll('[data-xhandle]').forEach(inp=>{
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter') fetchXAvatar(+inp.dataset.xhandle); });
+  inp.addEventListener('focus',()=>{ activeSlot=+inp.dataset.xhandle; });
+});
+document.querySelectorAll('[data-pick],[data-rand]').forEach(b=>b.addEventListener('mousedown',()=>{
+  activeSlot=+(b.dataset.pick ?? b.dataset.rand);
 }));
+// クリップボードから画像を貼り付け（通信不要 → 制限環境でも動く）
+document.addEventListener('paste',e=>{
+  const items=(e.clipboardData||{}).items; if(!items) return;
+  for(const it of items){
+    if(it.type && it.type.startsWith('image/')){
+      fileToSlot(activeSlot, it.getAsFile()); e.preventDefault(); return;
+    }
+  }
+});
 document.getElementById('filepick').addEventListener('change',e=>{
   if(currentPick!=null) fileToSlot(currentPick,e.target.files[0]);
   e.target.value='';
