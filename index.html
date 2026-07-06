@@ -140,6 +140,10 @@
   }
   /* バトルの3D化キャラ */
   .portrait .obj3d{width:106px; height:106px; display:block}
+  /* P1 セットアップの3Dプレビュー */
+  .p3dwrap{text-align:center; margin-top:12px; padding-top:10px; border-top:2px dashed rgba(43,38,34,.2)}
+  .p3d{width:130px; height:130px; display:inline-block}
+  .cap3d{font-size:11px; opacity:.6; margin-top:2px}
   /* CPUプリセット */
   .presets{display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px}
   .presets .plabel{font-size:11px; opacity:.7; width:100%; margin-bottom:2px}
@@ -161,7 +165,7 @@
 
 <div class="wrap">
   <h1>SNSラクガキ大戦<span class="sub">RAKUGAKI ARENA</span></h1>
-  <p class="tagline">— SNSのサムネ画像が、そのまま戦士になる。色が力、輪郭が速さ。—<br><a href="./teddy.html" style="color:var(--red);font-weight:bold">🧸 3D化モック（Teddy風）を試す →</a></p>
+  <p class="tagline">— SNSのサムネ画像が、そのまま戦士になる。色が力、輪郭が速さ。—</p>
 
   <div class="proxycfg">
     <span>🔌 取得プロキシURL（任意）:</span>
@@ -187,6 +191,10 @@
         <button data-xget="0">取得</button>
       </div>
       <div class="stats" data-stats="0"></div>
+      <div class="p3dwrap" data-p3dwrap hidden>
+        <canvas class="obj3d p3d" data-p3d width="128" height="128"></canvas>
+        <div class="cap3d">🧸 3D化プレビュー（ぷるぷる）</div>
+      </div>
     </div>
 
     <div class="vs">VS</div>
@@ -199,7 +207,7 @@
       </div>
       <div class="row">
         <button data-pick="1">📁 画像を選ぶ</button>
-        <button data-rand="1">🎲 ランダム</button>
+        <button data-enemy>🎲 敵チェンジ</button>
       </div>
       <div class="row xrow">
         <span class="at">𝕏 @</span>
@@ -207,8 +215,6 @@
         <button data-xget="1">取得</button>
       </div>
       <div class="stats" data-stats="1"></div>
-      <div class="cpuMem" data-cpumem hidden>🔒 この画像をCPUとして記憶中（次回も自動セット）· <a href="#" data-cpuclear>解除</a></div>
-      <div class="presets" data-presets></div>
     </div>
   </div>
 
@@ -339,40 +345,11 @@ function loadImage(slot, src, cors){
     drop.classList.add('filled'); drop.querySelector('img').src=src;
     renderStats(slot);
     document.getElementById('startBtn').disabled = !(fighters[0]&&fighters[1]);
-    persistCpu(slot,img);           // P2ならCPUとして記憶
+    if(slot===0) buildP1Preview(img);   // P1は3D化プレビューを表示
   };
   img.onerror=()=>alert('画像の読み込みに失敗しました。');
   img.src=src;
 }
-
-// ---- CPU(P2)画像の記憶：一度セットすれば次回も自動復元 ----
-const CPU_KEY='rakugaki_cpu_img';
-function persistCpu(slot,img){
-  if(slot!==1) return;
-  try{
-    const c=document.createElement('canvas');
-    const w=img.naturalWidth||128, h=img.naturalHeight||128;
-    const s=Math.min(256,w), sc=s/w;
-    c.width=s; c.height=Math.max(1,Math.round(h*sc));
-    c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-    localStorage.setItem(CPU_KEY, c.toDataURL('image/jpeg',0.85));
-    document.querySelector('[data-cpumem]').hidden=false;
-  }catch(e){ /* 汚染 or 容量超過なら記憶しない */ }
-}
-function restoreCpu(){
-  let d=null; try{ d=localStorage.getItem(CPU_KEY); }catch(e){}
-  if(d){ loadImage(1,d); document.querySelector('[data-cpumem]').hidden=false; }
-}
-document.querySelector('[data-cpuclear]').addEventListener('click',e=>{
-  e.preventDefault();
-  try{ localStorage.removeItem(CPU_KEY); }catch(_){}
-  fighters[1]=null;
-  const drop=document.querySelector('[data-slot="1"]');
-  drop.classList.remove('filled'); drop.querySelector('img').removeAttribute('src');
-  document.querySelector('[data-stats="1"]').classList.remove('show');
-  document.querySelector('[data-cpumem]').hidden=true;
-  document.getElementById('startBtn').disabled=true;
-});
 
 function fileToSlot(slot,file){
   if(!file||!file.type.startsWith('image/')) return;
@@ -472,7 +449,7 @@ async function fetchXAvatar(slot){
       drop.classList.add('filled'); drop.querySelector('img').src=img.src;
       renderStats(slot);
       document.getElementById('startBtn').disabled=!(fighters[0]&&fighters[1]);
-      persistCpu(slot,img);                // P2ならCPUとして記憶
+      if(slot===0) buildP1Preview(img);    // P1は3D化プレビュー
       btn.textContent='取得'; btn.disabled=false;
       return; // 成功
     }catch(e){ errs.push(name+'：'+((e&&e.message)||e)); }
@@ -693,6 +670,11 @@ function renderInflation(b,ctx,t,phase){
   const W=(P-14)*sq, Hh=(P-14)/sq, x=(P-W)/2, y=(P-Hh)/2+bob;
   ctx.imageSmoothingEnabled=true; ctx.drawImage(b._tmp,x,y,W,Hh);
 }
+let p1obj=null;   // P1セットアップの3Dプレビュー用
+function buildP1Preview(img){
+  try{ p1obj=bakeInflation(img); document.querySelector('[data-p3dwrap]').hidden=false; }
+  catch(e){ p1obj=null; }
+}
 function battleLoop(t){
   const shown=document.getElementById('battle').classList.contains('show');
   if(state && shown){
@@ -702,28 +684,24 @@ function battleLoop(t){
       if(u.obj) renderInflation(u.obj,ctx,t,i*1.0);
       else if(u.raw){ ctx.clearRect(0,0,cv.width,cv.height); ctx.drawImage(u.raw,10,10,cv.width-20,cv.height-20); }
     });
+  } else if(p1obj){                    // バトル外：P1の3Dプレビューを回す
+    const cv=document.querySelector('[data-p3d]');
+    if(cv) renderInflation(p1obj, cv.getContext('2d'), t, 0);
   }
   requestAnimationFrame(battleLoop);
 }
 requestAnimationFrame(battleLoop);
 
 // ============================================================
-//  CPUプリセット（内蔵キャラ・タップでP2にセット）
+//  CPU＝渡された敵キャラ3枚からランダムに採用
 // ============================================================
-const PRESETS=[
-  {name:'エビっ',   src:'cpu/ebi.png'},
-  {name:'GMK',      src:'cpu/gmk.png'},
-  {name:'ぶちギレ', src:'cpu/gire.png'},
-];
-(function buildPresets(){
-  const wrap=document.querySelector('[data-presets]'); if(!wrap) return;
-  const lab=document.createElement('span'); lab.className='plabel'; lab.textContent='CPUプリセット（タップでP2にセット）:'; wrap.appendChild(lab);
-  PRESETS.forEach(p=>{
-    const im=document.createElement('img'); im.src=p.src; im.alt=p.name; im.title=p.name;
-    im.addEventListener('click',()=>loadImage(1, p.src));   // 同一オリジンなので解析OK
-    wrap.appendChild(im);
-  });
-})();
+const ENEMIES=['cpu/ebi.png','cpu/gmk.png','cpu/gire.png'];
+let lastEnemy=-1;
+function randomEnemy(){
+  let i; do{ i=Math.floor(Math.random()*ENEMIES.length); }while(ENEMIES.length>1 && i===lastEnemy);
+  lastEnemy=i; loadImage(1, ENEMIES[i]);   // 同一オリジンなので解析OK
+}
+document.querySelector('[data-enemy]').onclick=randomEnemy;
 
 // ---- 取得プロキシ(Cloudflare Worker)URL の保存/読込 ----
 const WK_KEY='rakugaki_worker';
@@ -751,6 +729,6 @@ document.getElementById('xpost').onclick=()=>{
   window.open(intent,'_blank','noopener');
 };
 
-// 起動時：記憶済みのCPU(P2)画像があれば自動セット
-restoreCpu();
+// 起動時：CPUに敵キャラをランダムセット
+randomEnemy();
 </script>
