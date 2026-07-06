@@ -48,6 +48,13 @@
   .drop .hint{padding:12px; font-size:13px; opacity:.7; line-height:1.5}
   .drop.filled .hint{display:none}
   .row{display:flex; gap:8px; margin-top:10px}
+  .xrow{align-items:center}
+  .xrow .at{font-weight:bold; opacity:.6}
+  .xrow input{
+    font-family:inherit; flex:1; min-width:0; border:2.5px solid var(--line);
+    border-radius:9px; padding:7px 9px; font-size:14px; background:var(--paper);
+  }
+  .xrow button{flex:none}
   button{
     font-family:inherit; cursor:pointer; border:2.5px solid var(--line);
     background:var(--paper); color:var(--ink); border-radius:10px 9px 11px 8px;
@@ -117,6 +124,11 @@
         <button data-pick="0">📁 画像を選ぶ</button>
         <button data-rand="0">🎲 ランダム</button>
       </div>
+      <div class="row xrow">
+        <span class="at">𝕏 @</span>
+        <input data-xhandle="0" placeholder="アカウント名" autocomplete="off" spellcheck="false">
+        <button data-xget="0">取得</button>
+      </div>
       <div class="stats" data-stats="0"></div>
     </div>
 
@@ -131,6 +143,11 @@
       <div class="row">
         <button data-pick="1">📁 画像を選ぶ</button>
         <button data-rand="1">🎲 ランダム</button>
+      </div>
+      <div class="row xrow">
+        <span class="at">𝕏 @</span>
+        <input data-xhandle="1" placeholder="アカウント名" autocomplete="off" spellcheck="false">
+        <button data-xget="1">取得</button>
       </div>
       <div class="stats" data-stats="1"></div>
     </div>
@@ -244,8 +261,9 @@ function renderStats(slot){
   box.classList.add('show');
 }
 
-function loadImage(slot, src){
+function loadImage(slot, src, cors){
   const img=new Image();
+  if(cors) img.crossOrigin='anonymous';   // ピクセル解析用にCORSを要求
   img.onload=()=>{
     let stats;
     try{ stats=analyze(img); }
@@ -297,6 +315,41 @@ document.querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>{
   currentPick=+b.dataset.pick; document.getElementById('filepick').click();
 });
 document.querySelectorAll('[data-rand]').forEach(b=>b.onclick=()=>randomImage(+b.dataset.rand));
+
+// ---- Xアカウント名 → プロフィール画像を取得（公開アバタープロキシ経由）----
+function fetchXAvatar(slot){
+  const inp=document.querySelector(`[data-xhandle="${slot}"]`);
+  const handle=(inp.value||'').trim().replace(/^@+/,'').replace(/\s+/g,'');
+  if(!handle){ inp.focus(); return; }
+  const btn=document.querySelector(`[data-xget="${slot}"]`);
+  btn.textContent='取得中…'; btn.disabled=true;
+  // fallback=false: アバターが無ければ既定シルエットではなく失敗を返させる
+  const url=`https://unavatar.io/twitter/${encodeURIComponent(handle)}?fallback=false`;
+  const done=ok=>{ btn.textContent='取得'; btn.disabled=false; };
+  const img=new Image(); img.crossOrigin='anonymous';
+  img.onload=()=>{
+    try{
+      const stats=analyze(img);                       // CORS成功→ピクセル解析OK
+      fighters[slot]={img,stats};
+      const drop=document.querySelector(`[data-slot="${slot}"]`);
+      drop.classList.add('filled'); drop.querySelector('img').src=img.src;
+      renderStats(slot);
+      document.getElementById('startBtn').disabled=!(fighters[0]&&fighters[1]);
+    }catch(e){
+      alert('@'+handle+' の画像は取得できましたが、CORS制限でステータス解析ができませんでした。\n画像を保存して「📁画像を選ぶ」からドラッグしてください。');
+    }
+    done();
+  };
+  img.onerror=()=>{
+    done();
+    alert('@'+handle+' の画像を取得できませんでした。\n・アカウント名が正しいか\n・非公開/存在しないアカウントでないか\nを確認してください。\n（Xの仕様変更で取得プロキシが一時的に使えない場合もあります。その際は画像を保存してドラッグしてください）');
+  };
+  img.src=url;
+}
+document.querySelectorAll('[data-xget]').forEach(b=>b.onclick=()=>fetchXAvatar(+b.dataset.xget));
+document.querySelectorAll('[data-xhandle]').forEach(inp=>inp.addEventListener('keydown',e=>{
+  if(e.key==='Enter') fetchXAvatar(+inp.dataset.xhandle);
+}));
 document.getElementById('filepick').addEventListener('change',e=>{
   if(currentPick!=null) fileToSlot(currentPick,e.target.files[0]);
   e.target.value='';
