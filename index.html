@@ -138,6 +138,14 @@
     18%{opacity:1; transform:translate(-50%,0) scale(1.15)}
     100%{opacity:0; transform:translate(-50%,-46px) scale(1.1)}
   }
+  /* バトルの3D化キャラ */
+  .portrait .obj3d{width:106px; height:106px; display:block}
+  /* CPUプリセット */
+  .presets{display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px}
+  .presets .plabel{font-size:11px; opacity:.7; width:100%; margin-bottom:2px}
+  .presets canvas{width:42px; height:42px; border:2.5px solid var(--line); border-radius:9px;
+    cursor:pointer; box-shadow:1px 1px 0 rgba(43,38,34,.2)}
+  .presets canvas:hover{transform:translate(-1px,-1px)}
 </style>
 
 <div class="wrap">
@@ -182,6 +190,7 @@
       </div>
       <div class="stats" data-stats="1"></div>
       <div class="cpuMem" data-cpumem hidden>🔒 この画像をCPUとして記憶中（次回も自動セット）· <a href="#" data-cpuclear>解除</a></div>
+      <div class="presets" data-presets></div>
     </div>
   </div>
 
@@ -192,11 +201,11 @@
   <div class="sketch" id="battle">
     <div class="bfield">
       <div class="bunit" data-u="0">
-        <div class="portrait"><img alt=""></div><div class="bname"></div>
+        <div class="portrait"><canvas class="obj3d" width="128" height="128"></canvas></div><div class="bname"></div>
         <div class="hpbar"><span></span></div><div class="hptxt"></div>
       </div>
       <div class="bunit" data-u="1">
-        <div class="portrait"><img alt=""></div><div class="bname"></div>
+        <div class="portrait"><canvas class="obj3d" width="128" height="128"></canvas></div><div class="bname"></div>
         <div class="hpbar"><span></span></div><div class="hptxt"></div>
       </div>
     </div>
@@ -483,8 +492,9 @@ function startBattle(){
   state={u:[mk(fighters[0],'P1'), mk(fighters[1],'P2')], over:false};
   ['0','1'].forEach(i=>{
     const box=document.querySelector(`.bunit[data-u="${i}"]`), u=state.u[i];
-    box.querySelector('img').src=u.img;
     box.querySelector('.bname').textContent=`${u.tag}・ランク${u.rank}（${ELEM_JP[u.elem]}）`;
+    // Teddy風にインフレーション（失敗時は素の画像を表示）
+    try{ u.obj=bakeInflation(fighters[i].img); }catch(e){ u.obj=null; u.raw=fighters[i].img; }
   });
   refresh();
   document.getElementById('hands').style.pointerEvents='auto';
@@ -506,16 +516,16 @@ function refresh(){
 // ---- 攻撃エフェクト（揺れ＋フラッシュ＋数字ポップ）----
 function hitFx(idx, flashKind, fxClass, text){
   const box=document.querySelector(`.bunit[data-u="${idx}"]`); if(!box) return;
-  const port=box.querySelector('.portrait'), img=port.querySelector('img');
-  img.classList.remove('shake'); void img.offsetWidth; img.classList.add('shake');
+  const port=box.querySelector('.portrait'), el=port.querySelector('.obj3d');
+  if(el){ el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
   const fl=document.createElement('div'); fl.className='flash on '+flashKind; port.appendChild(fl);
   setTimeout(()=>fl.remove(),380);
   const fx=document.createElement('div'); fx.className='fx '+fxClass; fx.textContent=text; port.appendChild(fx);
   setTimeout(()=>fx.remove(),950);
 }
 function lunge(idx){
-  const img=document.querySelector(`.bunit[data-u="${idx}"] .portrait img`); if(!img) return;
-  img.classList.remove('lunge'); void img.offsetWidth; img.classList.add('lunge');
+  const el=document.querySelector(`.bunit[data-u="${idx}"] .portrait .obj3d`); if(!el) return;
+  el.classList.remove('lunge'); void el.offsetWidth; el.classList.add('lunge');
 }
 
 const BEATS={gu:'choki',choki:'pa',pa:'gu'};      // 勝ち手→負け手
@@ -585,6 +595,125 @@ document.getElementById('resetBtn').onclick=()=>{
   document.getElementById('battle').classList.remove('show'); state=null;
   window.scrollTo({top:0,behavior:'smooth'});
 };
+
+// ============================================================
+//  Teddy風インフレーション（バトルのキャラを立体表示）
+//  シルエット→距離変換→高さ→法線→陰影
+// ============================================================
+const OBJP=128;
+function inflaMask(d,W,H){
+  const m=new Uint8Array(W*H), cx=(W-1)/2, cy=(H-1)/2, rx=W*0.46, ry=H*0.46;
+  const cor=[[0,0],[W-1,0],[0,H-1],[W-1,H-1]]; let br=0,bg=0,bb=0;
+  for(const [x,y] of cor){const i=(y*W+x)*4; br+=d[i];bg+=d[i+1];bb+=d[i+2];}
+  br/=4;bg/=4;bb/=4; let cnt=0;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const i=(y*W+x)*4, dist=Math.abs(d[i]-br)+Math.abs(d[i+1]-bg)+Math.abs(d[i+2]-bb);
+    const on=dist>70?1:0; m[y*W+x]=on; cnt+=on;
+  }
+  const frac=cnt/(W*H);
+  if(frac<0.05||frac>0.92){ // 背景除去が破綻→楕円
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const nx=(x-cx)/rx,ny=(y-cy)/ry; m[y*W+x]=(nx*nx+ny*ny<=1)?1:0;}
+  }
+  return m;
+}
+function inflaDT(m,W,H){
+  const d=new Float32Array(W*H); for(let i=0;i<W*H;i++)d[i]=m[i]?1e9:0;
+  const at=(x,y)=>(x<0||y<0||x>=W||y>=H)?0:d[y*W+x];
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){ if(!m[y*W+x])continue;
+    d[y*W+x]=Math.min(d[y*W+x],at(x-1,y)+1,at(x,y-1)+1,at(x-1,y-1)+1.41421,at(x+1,y-1)+1.41421);}
+  for(let y=H-1;y>=0;y--)for(let x=W-1;x>=0;x--){ if(!m[y*W+x])continue;
+    d[y*W+x]=Math.min(d[y*W+x],at(x+1,y)+1,at(x,y+1)+1,at(x+1,y+1)+1.41421,at(x-1,y+1)+1.41421);}
+  return d;
+}
+function bakeInflation(img){
+  const P=OBJP, c=document.createElement('canvas'); c.width=c.height=P;
+  const g=c.getContext('2d',{willReadFrequently:true});
+  const iw=img.naturalWidth||P, ih=img.naturalHeight||P, s=Math.min(P/iw,P/ih);
+  const ow=iw*s, oh=ih*s; g.drawImage(img,(P-ow)/2,(P-oh)/2,ow,oh);
+  const tex=g.getImageData(0,0,P,P).data;
+  const mask=inflaMask(tex,P,P), dist=inflaDT(mask,P,P);
+  let maxD=1; for(let i=0;i<P*P;i++) if(dist[i]>maxD)maxD=dist[i];
+  const hgt=new Float32Array(P*P);
+  for(let i=0;i<P*P;i++){const dd=dist[i]; hgt[i]=dd>0?Math.sqrt(Math.max(0,dd*(2*maxD-dd))):0;}
+  const nx=new Float32Array(P*P), ny=new Float32Array(P*P), nz=new Float32Array(P*P);
+  const Hh=(x,y)=>(x<0||y<0||x>=P||y>=P)?0:hgt[y*P+x];
+  for(let y=0;y<P;y++)for(let x=0;x<P;x++){ const i=y*P+x; if(!mask[i])continue;
+    const gx=Hh(x+1,y)-Hh(x-1,y), gy=Hh(x,y+1)-Hh(x,y-1);
+    let vx=-gx,vy=-gy,vz=2.4,l=Math.hypot(vx,vy,vz)||1; nx[i]=vx/l;ny[i]=vy/l;nz[i]=vz/l;}
+  return {tex,mask,nx,ny,nz,P};
+}
+function renderInflation(b,ctx,t,phase){
+  const P=b.P,{tex,mask,nx,ny,nz}=b;
+  const ang=t*0.0012+(phase||0)*2.1, Lx=Math.cos(ang)*0.6,Ly=-0.5,Lz=0.62,Ll=Math.hypot(Lx,Ly,Lz);
+  const lx=Lx/Ll,ly=Ly/Ll,lz=Lz/Ll;
+  if(!b._im) b._im=ctx.createImageData(P,P);
+  const o=b._im.data, amb=0.34;
+  for(let i=0;i<P*P;i++){ const j=i*4;
+    if(!mask[i]){o[j+3]=0;continue;}
+    let diff=nx[i]*lx+ny[i]*ly+nz[i]*lz; if(diff<0)diff=0;
+    const spec=Math.pow(diff,18)*0.5, sh=amb+diff*0.9;
+    o[j]=Math.min(255,tex[j]*sh+spec*255); o[j+1]=Math.min(255,tex[j+1]*sh+spec*255);
+    o[j+2]=Math.min(255,tex[j+2]*sh+spec*255); o[j+3]=255;
+  }
+  if(!b._tmp){ b._tmp=document.createElement('canvas'); b._tmp.width=b._tmp.height=P; b._tc=b._tmp.getContext('2d'); }
+  b._tc.putImageData(b._im,0,0);
+  ctx.clearRect(0,0,P,P);
+  const bob=Math.sin(t*0.004+(phase||0))*4, sq=1+Math.sin(t*0.004+(phase||0))*0.02;
+  ctx.save(); ctx.globalAlpha=.16; ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.ellipse(P/2,P-10,P*0.32,6,0,0,7); ctx.fill(); ctx.restore();
+  const W=(P-14)*sq, Hh=(P-14)/sq, x=(P-W)/2, y=(P-Hh)/2+bob;
+  ctx.imageSmoothingEnabled=true; ctx.drawImage(b._tmp,x,y,W,Hh);
+}
+function battleLoop(t){
+  const shown=document.getElementById('battle').classList.contains('show');
+  if(state && shown){
+    state.u.forEach((u,i)=>{
+      const cv=document.querySelector(`.bunit[data-u="${i}"] .obj3d`); if(!cv)return;
+      const ctx=cv.getContext('2d');
+      if(u.obj) renderInflation(u.obj,ctx,t,i*1.0);
+      else if(u.raw){ ctx.clearRect(0,0,cv.width,cv.height); ctx.drawImage(u.raw,10,10,cv.width-20,cv.height-20); }
+    });
+  }
+  requestAnimationFrame(battleLoop);
+}
+requestAnimationFrame(battleLoop);
+
+// ============================================================
+//  CPUプリセット（内蔵キャラ・タップでP2にセット）
+// ============================================================
+function pmon(body,accent,extra){
+  const c=document.createElement('canvas'); c.width=c.height=120; const g=c.getContext('2d');
+  g.fillStyle='#f2ead6'; g.fillRect(0,0,120,120);            // 単色背景→自動でシルエット化
+  if(extra==='rainbow'){
+    for(let k=0;k<6;k++){ g.fillStyle=`hsl(${k*60},75%,55%)`;
+      g.beginPath(); g.moveTo(60,66); g.arc(60,66,42,k*Math.PI/3,(k+1)*Math.PI/3); g.closePath(); g.fill(); }
+  }else if(extra==='stripe'){
+    g.save(); g.beginPath(); g.arc(60,66,42,0,7); g.clip();
+    for(let x=18;x<102;x+=9){ g.fillStyle=((x/9)|0)%2?'#151515':'#ededed'; g.fillRect(x,20,9,92);} g.restore();
+  }else{
+    g.fillStyle=body; g.beginPath(); g.arc(60,66,42,0,7); g.fill();
+    g.fillStyle=accent; g.beginPath(); g.arc(60,30,16,0,7); g.fill();
+  }
+  g.fillStyle='#fff'; g.beginPath(); g.arc(47,60,9,0,7); g.arc(73,60,9,0,7); g.fill();
+  g.fillStyle='#2b2622'; g.beginPath(); g.arc(47,61,4.5,0,7); g.arc(73,61,4.5,0,7); g.fill();
+  return c;
+}
+const PRESETS=[
+  {name:'紅蓮', c:()=>pmon('#e0533d','#b5231a')},
+  {name:'蒼海', c:()=>pmon('#3d78e0','#2a54a8')},
+  {name:'森羅', c:()=>pmon('#4caa5a','#2f7d3c')},
+  {name:'黄金', c:()=>pmon('#e0a63d','#c07f1f')},
+  {name:'虹彩', c:()=>pmon(null,null,'rainbow')},
+  {name:'電磁', c:()=>pmon(null,null,'stripe')},
+];
+(function buildPresets(){
+  const wrap=document.querySelector('[data-presets]'); if(!wrap) return;
+  const lab=document.createElement('span'); lab.className='plabel'; lab.textContent='CPUプリセット（タップでP2にセット）:'; wrap.appendChild(lab);
+  PRESETS.forEach(p=>{ const c=p.c(); c.title=p.name;
+    c.addEventListener('click',()=>loadImage(1, c.toDataURL()));
+    wrap.appendChild(c);
+  });
+})();
 
 // 起動時：記憶済みのCPU(P2)画像があれば自動セット
 restoreCpu();
