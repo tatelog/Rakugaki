@@ -5,7 +5,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: ["claude/rakugaki-kingdom-research-1sse1i"]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
