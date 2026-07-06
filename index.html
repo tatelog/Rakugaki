@@ -317,40 +317,63 @@ document.querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>{
 });
 document.querySelectorAll('[data-rand]').forEach(b=>b.onclick=()=>randomImage(+b.dataset.rand));
 
-// ---- Xアカウント名 → プロフィール画像を取得（公開アバタープロキシ経由）----
-function fetchXAvatar(slot){
+// ---- Xアカウント名 → プロフィール画像を取得（複数経路を順に試行）----
+// CORS対応の画像プロキシ。canvas解析が確実に通るよう全経路をこれで包む。
+function weserv(u){ return 'https://images.weserv.nl/?url='+encodeURIComponent(u.replace(/^https?:\/\//,'')); }
+
+// crossOrigin付きで画像を読み込む（タイムアウト付き）
+function loadCorsImage(url, ms){
+  return new Promise((resolve,reject)=>{
+    const img=new Image(); img.crossOrigin='anonymous';
+    const t=setTimeout(()=>{ img.src=''; reject(new Error('タイムアウト')); }, ms||9000);
+    img.onload=()=>{ clearTimeout(t); img.naturalWidth>1 ? resolve(img) : reject(new Error('空画像')); };
+    img.onerror=()=>{ clearTimeout(t); reject(new Error('読み込み失敗')); };
+    img.src=url;
+  });
+}
+
+// X公式シンジケーションAPI（follow-buttonウィジェット用の公開JSON）から本物のアイコンURLを解決
+async function resolveSyndication(h){
+  const r=await fetch('https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names='+encodeURIComponent(h),{credentials:'omit'});
+  if(!r.ok) throw new Error('公式API HTTP '+r.status);
+  const j=await r.json();
+  const u=j && j[0] && j[0].profile_image_url_https;
+  if(!u) throw new Error('画像URLなし（非公開/存在しない可能性）');
+  return weserv(u.replace('_normal','_400x400')); // 高解像度版をCORSプロキシ経由で
+}
+
+async function fetchXAvatar(slot){
   const inp=document.querySelector(`[data-xhandle="${slot}"]`);
-  const handle=(inp.value||'').trim().replace(/^@+/,'').replace(/\s+/g,'');
-  if(!handle){ inp.focus(); return; }
+  const h=(inp.value||'').trim().replace(/^@+/,'').replace(/\s+/g,'');
+  if(!h){ inp.focus(); return; }
   const btn=document.querySelector(`[data-xget="${slot}"]`);
   btn.textContent='取得中…'; btn.disabled=true;
-  // fallback=false: アバターが無ければ既定シルエットではなく失敗を返させる
-  const url=`https://unavatar.io/twitter/${encodeURIComponent(handle)}?fallback=false`;
-  let settled=false;
-  const done=()=>{ if(settled) return; settled=true; clearTimeout(timer); btn.textContent='取得'; btn.disabled=false; };
-  // プレビュー画面など外部通信が遮断された環境では onload/onerror が来ないことがある
-  const timer=setTimeout(()=>{ done(); alert('取得の応答がありません。\nこのプレビュー画面や制限環境では外部通信が遮断されているため取得できません。\n\n■ 確実な方法：Xのアイコンをスクショして Ctrl/Cmd+V で貼り付け、\n  または画像を保存してドラッグ／📁で読み込んでください。'); }, 12000);
-  const img=new Image(); img.crossOrigin='anonymous';
-  img.onload=()=>{
-    if(settled) return;
+
+  // 取得経路（上から順に試し、最初に成功したものを採用）
+  const routes=[
+    ['X公式API', ()=>resolveSyndication(h)],
+    ['unavatar/twitter(proxy)', ()=>weserv('unavatar.io/twitter/'+encodeURIComponent(h))],
+    ['unavatar/x(proxy)',       ()=>weserv('unavatar.io/x/'+encodeURIComponent(h))],
+    ['unavatar/twitter(直)',    ()=>'https://unavatar.io/twitter/'+encodeURIComponent(h)+'?fallback=false'],
+  ];
+  const errs=[];
+  for(const [name,getUrl] of routes){
     try{
-      const stats=analyze(img);                       // CORS成功→ピクセル解析OK
+      const url=await getUrl();
+      const img=await loadCorsImage(url, 9000);
+      const stats=analyze(img);            // CORSプロキシ経由なので解析が通る
       fighters[slot]={img,stats};
       const drop=document.querySelector(`[data-slot="${slot}"]`);
       drop.classList.add('filled'); drop.querySelector('img').src=img.src;
       renderStats(slot);
       document.getElementById('startBtn').disabled=!(fighters[0]&&fighters[1]);
-    }catch(e){
-      alert('@'+handle+' の画像は取得できましたが、CORS制限でステータス解析ができませんでした。\n画像を保存して「📁画像を選ぶ」からドラッグしてください。');
-    }
-    done();
-  };
-  img.onerror=()=>{
-    if(settled) return;
-    done();
-    alert('@'+handle+' の画像を取得できませんでした。\n・アカウント名が正しいか\n・非公開/存在しないアカウントでないか\nを確認してください。\n（Xの仕様変更で取得プロキシが一時的に使えない場合もあります。その際は画像を保存してドラッグしてください）');
-  };
-  img.src=url;
+      btn.textContent='取得'; btn.disabled=false;
+      return; // 成功
+    }catch(e){ errs.push(name+'：'+((e&&e.message)||e)); }
+  }
+  btn.textContent='取得'; btn.disabled=false;
+  alert('@'+h+' を取得できませんでした。試した経路:\n・'+errs.join('\n・')+
+    '\n\nアカウント名が正しいか / 非公開でないかをご確認ください。\n■ 確実な方法：Xのアイコンをスクショして Ctrl/Cmd+V で貼り付け、または画像を保存してドラッグしてください。');
 }
 document.querySelectorAll('[data-xget]').forEach(b=>b.onclick=()=>fetchXAvatar(+b.dataset.xget));
 document.querySelectorAll('[data-xhandle]').forEach(inp=>{
