@@ -33,6 +33,11 @@
   /* ---- fighter setup ---- */
   .arena{display:grid; grid-template-columns:1fr auto 1fr; gap:14px; align-items:stretch}
   @media(max-width:720px){ .arena{grid-template-columns:1fr; } .vs{transform:rotate(0)} }
+  @media(max-width:480px){
+    .bfield{ grid-template-columns:1fr; }
+    .hands{ flex-wrap:wrap; }
+    .hand{ min-width:calc(50% - 8px); padding:14px 8px; }
+  }
   .fighter{padding:14px}
   .fighter h2{margin:0 0 10px; font-size:18px; display:flex; align-items:center; gap:8px}
   .drop{
@@ -380,11 +385,18 @@ function onConnEstablished(conn, isHost){
   if(fighters[myPlayerIndex]) sendOnlineJoin(myPlayerIndex);
 }
 
+// NAT越え改善: STUNを複数追加（対称NATのモバイル回線でも成功率向上）
+const ICE_CONFIG = { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+]};
+
 function createRoom(){
   showConsent(()=>{
     if(myPeer){ myPeer.destroy(); myPeer=null; }
     setRoomStatus('ルーム作成中…');
-    myPeer=new Peer();
+    myPeer=new Peer(undefined, { config: ICE_CONFIG });
     myPeer.on('open', id=>{
       document.getElementById('roomInput').value=id;
       setRoomStatus('✅ ルーム作成！IDをコピーして友達に送って');
@@ -403,7 +415,7 @@ function joinRoom(){
   showConsent(()=>{
     if(myPeer){ myPeer.destroy(); myPeer=null; }
     setRoomStatus('接続中…');
-    myPeer=new Peer();
+    myPeer=new Peer(undefined, { config: ICE_CONFIG });
     myPeer.on('open', ()=>{
       const conn=myPeer.connect(id, {reliable:true, serialization:'json'});
       conn.on('open', ()=>onConnEstablished(conn, false));
@@ -629,7 +641,7 @@ function weserv(u){ return 'https://images.weserv.nl/?url='+encodeURIComponent(u
 function loadCorsImage(url, ms){
   return new Promise((resolve,reject)=>{
     const img=new Image(); img.crossOrigin='anonymous';
-    const t=setTimeout(()=>{ img.src=''; reject(new Error('タイムアウト')); }, ms||9000);
+    const t=setTimeout(()=>{ img.src=''; reject(new Error('タイムアウト')); }, ms||5000);
     img.onload=()=>{ clearTimeout(t); img.naturalWidth>1 ? resolve(img) : reject(new Error('空画像')); };
     img.onerror=()=>{ clearTimeout(t); reject(new Error('読み込み失敗')); };
     img.src=url;
@@ -666,9 +678,7 @@ async function fetchXAvatar(slot){
   if(wk) routes.push(['自前Worker', ()=> wk + (wk.includes('?')?'&':'?') + 'u=' + encodeURIComponent(h)]);
   routes.push(
     ['X公式API', ()=>resolveSyndication(h)],
-    ['unavatar/twitter(proxy)', ()=>weserv('unavatar.io/twitter/'+encodeURIComponent(h))],
-    ['unavatar/x(proxy)',       ()=>weserv('unavatar.io/x/'+encodeURIComponent(h))],
-    ['unavatar/twitter(直)',    ()=>'https://unavatar.io/twitter/'+encodeURIComponent(h)+'?fallback=false'],
+    ['unavatar/x(proxy)',  ()=>weserv('unavatar.io/x/'+encodeURIComponent(h))],
   );
   const errs=[];
   for(const [name,getUrl] of routes){
