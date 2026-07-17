@@ -166,6 +166,20 @@
   #xpost{flex:none; background:#0f1419; color:#fff; border-color:#0f1419;
     padding:12px 24px; font-size:15px; border-radius:10px 9px 11px 8px}
   #xpost:hover{background:#000}
+  /* フェイント */
+  .feint-bar{display:flex; gap:8px; align-items:center; justify-content:center; margin:6px 0}
+  #feintBtn{flex:none; background:#fff8d6; border-color:var(--gold); padding:10px 16px; font-size:14px; width:auto}
+  #feintBtn.primed{background:#ffe066; box-shadow:0 0 0 3px var(--gold); animation:pulse .6s infinite alternate}
+  @keyframes pulse{from{box-shadow:0 0 0 3px var(--gold)}to{box-shadow:0 0 0 6px rgba(224,166,61,.4)}}
+  .feint-badge{font-size:12px; padding:2px 7px; border:2px solid var(--gold); border-radius:20px; background:#fff8d6; margin-left:4px}
+  #phase-hint{text-align:center; font-size:14px; font-weight:bold; min-height:1.5em; color:var(--red); margin:2px 0 4px; letter-spacing:.5px}
+  /* AI実況 */
+  #ai-log{font-size:14px; font-style:italic; color:#5c4a2a; padding:4px 8px; min-height:1.4em; text-align:center}
+  /* OpenAI設定 */
+  .oai-cfg{max-width:960px; margin:0 auto 10px; font-size:12px; opacity:.85; display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+  .oai-cfg input{flex:1; min-width:160px; font-family:monospace; border:2px solid var(--line); border-radius:8px; padding:6px 8px; font-size:12px; background:var(--paper)}
+  .oai-cfg button{padding:6px 10px; font-size:13px; flex:none}
+  .oai-cfg [data-oaistate]{font-size:11px}
 </style>
 
 <div class="wrap">
@@ -177,6 +191,13 @@
     <input data-worker placeholder="https://xxxx.workers.dev" autocomplete="off" spellcheck="false">
     <button data-workersave>保存</button>
     <span data-workerstate></span>
+  </div>
+
+  <div class="oai-cfg">
+    <span>🤖 OpenAI APIキー（実況・必殺技生成用）:</span>
+    <input id="oai-key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
+    <button id="oai-save">保存</button>
+    <span data-oaistate></span>
   </div>
 
   <div class="viewcfg">
@@ -246,11 +267,16 @@
         <div class="hpbar"><span></span></div><div class="hptxt"></div>
       </div>
     </div>
+    <div id="phase-hint"></div>
+    <div class="feint-bar">
+      <button id="feintBtn">🃏 フェイント <span class="feint-badge" id="feintCount">残り3</span></button>
+    </div>
     <div class="hands" id="hands">
       <button class="hand" data-move="gu">✊ 攻撃<small>パワーで殴る</small></button>
       <button class="hand" data-move="choki">✌️ 魔法<small>魔力で撃つ</small></button>
       <button class="hand" data-move="pa">✋ 防御<small>守備で守る/回復</small></button>
     </div>
+    <div id="ai-log"></div>
     <div id="log"></div>
     <div class="center"><button id="resetBtn" style="flex:none; padding:8px 20px">↩️ もう一度／画像を変える</button></div>
     <p class="why">じゃんけんの3すくみ：✊攻撃 &gt; ✌️魔法 &gt; ✋防御 &gt; ✊攻撃。勝った手の担当ステータスでダメージが決まり、素早さが行動順とにらみ合いを制します。属性（火＞森＞水＞火）で威力±。</p>
@@ -494,6 +520,84 @@ document.getElementById('filepick').addEventListener('change',e=>{
 });
 
 // ============================================================
+//  OpenAI APIキー管理 ＋ 必殺技生成（キャッシュ付き）＋ バトル実況
+// ============================================================
+const OAI_KEY_LS='rakugaki_oai_key';
+function getOaiKey(){ try{ return (localStorage.getItem(OAI_KEY_LS)||'').trim(); }catch(e){ return ''; } }
+(function initOaiCfg(){
+  const inp=document.getElementById('oai-key'), st=document.querySelector('[data-oaistate]');
+  const show=()=>{ const v=getOaiKey(); st.textContent=v?'✅ 設定済み':'（未設定）'; st.style.color=v?'#4caa5a':''; };
+  inp.value=getOaiKey(); show();
+  document.getElementById('oai-save').onclick=()=>{
+    const v=(inp.value||'').trim();
+    try{ v?localStorage.setItem(OAI_KEY_LS,v):localStorage.removeItem(OAI_KEY_LS); }catch(e){}
+    show();
+  };
+})();
+
+// 必殺技キャッシュ（画像のダイジェスト → 必殺技名+説明）
+const SKILL_CACHE_KEY='rakugaki_skills';
+function getSkillCache(){ try{ return JSON.parse(localStorage.getItem(SKILL_CACHE_KEY)||'{}'); }catch(e){ return {}; } }
+function saveSkillCache(c){ try{ localStorage.setItem(SKILL_CACHE_KEY,JSON.stringify(c)); }catch(e){} }
+
+// 画像の簡易フィンガープリント（ステータス値を文字列化して使う）
+function imgFingerprint(stats){ return `${stats.HP}_${stats.ATK}_${stats.MAG}_${stats.DEF}_${stats.SPD}_${stats.CRT}_${stats.elem}`; }
+
+async function generateSkill(stats, imgSrc){
+  const key=imgFingerprint(stats);
+  const cache=getSkillCache();
+  if(cache[key]) return cache[key]; // キャッシュ命中
+
+  const oaiKey=getOaiKey();
+  if(!oaiKey) return {name:'🔥 必殺技未生成', desc:'APIキーを設定してね'};
+
+  try{
+    const res=await fetch('https://api.openai.com/v1/chat/completions',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+oaiKey,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'gpt-4o-mini',
+        messages:[{role:'user',content:
+          `このキャラクターのステータスから必殺技を1つ考えてください。\n`+
+          `HP:${stats.HP} 攻撃力:${stats.ATK} 魔力:${stats.MAG} 守備:${stats.DEF} 素早さ:${stats.SPD} 属性:${stats.elem}\n`+
+          `必殺技名（10文字以内・絵文字1個付き）と、技の説明（20文字以内）をJSONで返してください。\n`+
+          `形式: {"name":"技名","desc":"説明"}`
+        }],
+        max_tokens:60
+      })
+    });
+    const d=await res.json();
+    const txt=(d.choices?.[0]?.message?.content||'{}').replace(/```json|```/g,'').trim();
+    const skill=JSON.parse(txt);
+    cache[key]=skill;
+    saveSkillCache(cache);
+    return skill;
+  }catch(e){ return {name:'⚡ 必殺技', desc:'謎の一撃'}; }
+}
+
+async function aiNarrate(context){
+  const oaiKey=getOaiKey(); if(!oaiKey) return;
+  const el=document.getElementById('ai-log'); if(!el) return;
+  el.textContent='🎙️ 実況中…';
+  try{
+    const r=await fetch('https://api.openai.com/v1/chat/completions',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+oaiKey,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'gpt-4o-mini',
+        messages:[{role:'user',content:
+          `あなたはSNSラクガキ大戦の熱血バトル実況者です。以下の状況を30文字以内・口語・エキサイティングに実況してください（絵文字1〜2個OK）。状況：${context}`
+        }],
+        max_tokens:80
+      })
+    });
+    const d=await r.json();
+    const txt=d.choices?.[0]?.message?.content||'';
+    el.textContent=txt ? '🎙️ '+txt : '';
+  }catch(e){ el.textContent=''; }
+}
+
+// ============================================================
 //  バトル（じゃんけん3すくみ ＋ 属性 ＋ 素早さ ＋ クリティカル）
 // ============================================================
 const logEl=document.getElementById('log');
@@ -501,23 +605,60 @@ let state=null;
 let lastResult=null;   // Xポスト用の直近の勝敗テキスト
 const ELEM_ADV={fire:'forest',forest:'water',water:'fire'}; // 火>森>水>火
 
+// フェイント状態
+let feint={used:0, max:3, step:0, declared:null};
+// step: 0=通常, 1=宣言手を選ぶ中, 2=実際の手を選ぶ中
+
+function updateFeintUI(){
+  const btn=document.getElementById('feintBtn');
+  const cnt=document.getElementById('feintCount');
+  const hint=document.getElementById('phase-hint');
+  const hands=document.getElementById('hands');
+  const rem=feint.max-feint.used;
+  cnt.textContent='残り'+rem;
+  btn.disabled=(rem<=0||(state&&state.over)||feint.step>0);
+  btn.classList.toggle('primed', feint.step>0);
+  if(feint.step===1){
+    hint.textContent='🃏 フェイント宣言：相手に見せかける手を選べ！';
+    hands.querySelectorAll('.hand').forEach(b=>{ b.querySelector('small').textContent=b.dataset.move==='gu'?'攻撃のフリ':b.dataset.move==='choki'?'魔法のフリ':'防御のフリ'; });
+  }else if(feint.step===2){
+    hint.textContent='⚡ 実際に出す手を選べ！';
+    hands.querySelectorAll('.hand').forEach(b=>{ b.querySelector('small').textContent=b.dataset.move==='gu'?'パワーで殴る':b.dataset.move==='choki'?'魔力で撃つ':'守備で守る/回復'; });
+  }else{
+    hint.textContent='';
+    hands.querySelectorAll('.hand').forEach(b=>{ b.querySelector('small').textContent=b.dataset.move==='gu'?'パワーで殴る':b.dataset.move==='choki'?'魔力で撃つ':'守備で守る/回復'; });
+  }
+}
+
 function log(html,cls){const p=document.createElement('p'); if(cls)p.className=cls; p.innerHTML=html; logEl.appendChild(p); logEl.scrollTop=logEl.scrollHeight;}
 
 function startBattle(){
   document.getElementById('battle').classList.add('show');
   logEl.innerHTML='';
+  document.getElementById('ai-log').textContent='';
   const mk=(f,tag)=>({...f.stats, img:f.img.src, hp:f.stats.HP, maxhp:f.stats.HP, tag});
   state={u:[mk(fighters[0],'P1'), mk(fighters[1],'P2')], over:false};
   ['0','1'].forEach(i=>{
     const box=document.querySelector(`.bunit[data-u="${i}"]`), u=state.u[i];
     box.querySelector('.bname').textContent=`${u.tag}・ランク${u.rank}（${ELEM_JP[u.elem]}）`;
-    // Teddy風にインフレーション（失敗時は素の画像を表示）
     try{ u.obj=bakeInflation(fighters[i].img); }catch(e){ u.obj=null; u.raw=fighters[i].img; }
   });
+  // フェイントリセット
+  feint={used:0, max:3, step:0, declared:null};
+  updateFeintUI();
   refresh();
   document.getElementById('hands').style.pointerEvents='auto';
   log('⚔️ バトル開始！ 手を選べ。','win');
   document.getElementById('battle').scrollIntoView({behavior:'smooth',block:'center'});
+  // 必殺技を非同期生成（P1のみ先行して）
+  generateSkill(fighters[0].stats, fighters[0].img.src).then(sk=>{
+    state.u[0].skill=sk;
+    log(`✨ P1の必殺技：<b>${sk.name}</b>「${sk.desc}」`,'');
+  });
+  generateSkill(fighters[1].stats, fighters[1].img.src).then(sk=>{
+    state.u[1].skill=sk;
+    log(`✨ P2の必殺技：<b>${sk.name}</b>「${sk.desc}」`,'');
+  });
 }
 
 function refresh(){
@@ -582,36 +723,86 @@ function damage(att,def,move){
   log(`${att.tag} の ${kind}！ ${def.tag} に <span class="${crit?'crit':'hit'}">${dmg} ダメージ</span>${crit?'（クリティカル！）':''}`, '');
 }
 
-function resolve(m0,m1){
+// CPUがフェイント宣言手を読んで対応する（70%で読む）
+function cpuMoveVsFeint(u, declared){
+  if(Math.random()<0.70) return BEATS[declared]; // 宣言手に有利な手
+  return cpuMove(u);
+}
+
+function resolve(m0, m1, feintDeclared=null){
   const [a,b]=state.u;
-  log(`— ${a.tag}:${MOVE_JP[m0]} × ${b.tag}:${MOVE_JP[m1]} —`);
+  const feintLabel = feintDeclared ? `（フェイント！${MOVE_JP[feintDeclared]}のふり）` : '';
+  log(`— ${a.tag}:${MOVE_JP[m0]}${feintLabel} × ${b.tag}:${MOVE_JP[m1]} —`);
+
+  let narrateCtx='';
   if(m0===m1){
-    // にらみ合い：素早い方が小突く
     const fast = a.SPD>=b.SPD ? a : b, slow = a.SPD>=b.SPD ? b : a;
     const chip=Math.round(fast.SPD*0.15+2); slow.hp-=chip;
     lunge(state.u.indexOf(fast)); hitFx(state.u.indexOf(slow),'dmg','dmg','-'+chip);
     log(`にらみ合い…素早い ${fast.tag} が先手で <span class="hit">${chip}</span> 小突く！`,'');
-  }else if(BEATS[m0]===m1){ damage(a,b,m0); }
-  else { damage(b,a,m1); }
+    narrateCtx=`${a.tag}と${b.tag}がにらみ合い、${fast.tag}が先手！`;
+  }else if(BEATS[m0]===m1){
+    damage(a,b,m0);
+    narrateCtx=`${a.tag}の${MOVE_JP[m0]}が${b.tag}の${MOVE_JP[m1]}を突破！`;
+    if(feintDeclared) narrateCtx=`フェイント成功！${MOVE_JP[feintDeclared]}と見せかけて${MOVE_JP[m0]}！${narrateCtx}`;
+  }else{
+    damage(b,a,m1);
+    narrateCtx=`${b.tag}の${MOVE_JP[m1]}が${a.tag}の${MOVE_JP[m0]}を返す！`;
+    if(feintDeclared) narrateCtx=`フェイント読まれた！${b.tag}が見切り反撃！${narrateCtx}`;
+  }
   refresh();
-  // 決着判定
   const dead=state.u.filter(u=>u.hp<=0);
   if(dead.length){
     state.over=true; document.getElementById('hands').style.pointerEvents='none';
+    feint.step=0; updateFeintUI();
     const winner = state.u[0].hp>state.u[1].hp ? state.u[0] : state.u[1];
-    const loser = winner===state.u[0]?state.u[1]:state.u[0];
-    if(state.u[0].hp<=0 && state.u[1].hp<=0){ log('💥 相打ち！引き分け！','win'); lastResult='相打ちで引き分け！'; }
+    if(state.u[0].hp<=0 && state.u[1].hp<=0){ log('💥 相打ち！引き分け！','win'); lastResult='相打ちで引き分け！'; narrateCtx+=' 相打ち！'; }
     else { log(`🏆 ${winner.tag}（ランク${winner.rank}・${ELEM_JP[winner.elem]}）の勝利！`,'win');
-           lastResult=`${winner.tag}（ランク${winner.rank}・${ELEM_JP[winner.elem]}属性）が勝利！`; }
+           lastResult=`${winner.tag}（ランク${winner.rank}・${ELEM_JP[winner.elem]}属性）が勝利！`; narrateCtx+=' '+winner.tag+'の勝利！'; }
   }
+  // AI実況（非同期・ノンブロッキング）
+  aiNarrate(narrateCtx);
 }
 
 document.querySelectorAll('.hand').forEach(btn=>{
-  btn.onclick=()=>{ if(!state||state.over) return; resolve(btn.dataset.move, cpuMove(state.u[1])); };
+  btn.onclick=()=>{
+    if(!state||state.over) return;
+    const move=btn.dataset.move;
+    if(feint.step===1){
+      // フェイント宣言手を記録
+      feint.declared=move;
+      feint.step=2;
+      feint.used++;
+      updateFeintUI();
+      log(`🃏 ${state.u[0].tag}：<b>${MOVE_JP[move]}</b> を出す構え…（フェイント！）`,'');
+    } else if(feint.step===2){
+      // 実際の手でresolve
+      const declared=feint.declared;
+      feint.step=0; feint.declared=null;
+      const cpuM=cpuMoveVsFeint(state.u[1], declared);
+      // CPUが宣言手を読んだかどうかを演出
+      if(BEATS[declared]===cpuM){
+        log(`　CPUは読んでいた！${MOVE_JP[cpuM]} で構える…`,'');
+      }else{
+        log(`　CPUはフェイントに引っかかった！${MOVE_JP[cpuM]} を選んだ`,'');
+      }
+      resolve(move, cpuM, declared);
+    } else {
+      resolve(move, cpuMove(state.u[1]));
+    }
+  };
 });
+
+document.getElementById('feintBtn').onclick=()=>{
+  if(!state||state.over||feint.used>=feint.max||feint.step>0) return;
+  feint.step=1; updateFeintUI();
+};
+
 document.getElementById('startBtn').onclick=startBattle;
 document.getElementById('resetBtn').onclick=()=>{
   document.getElementById('battle').classList.remove('show'); state=null;
+  feint={used:0, max:3, step:0, declared:null}; updateFeintUI();
+  document.getElementById('ai-log').textContent='';
   window.scrollTo({top:0,behavior:'smooth'});
 };
 
