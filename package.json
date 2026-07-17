@@ -1,0 +1,12 @@
+{
+  "name": "rakugaki-arena",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "partykit dev",
+    "deploy": "partykit deploy"
+  },
+  "dependencies": {
+    "partykit": "^0.0.111",
+    "partysocket": "^1.0.2"
+  }
+}

@@ -180,7 +180,34 @@
   .oai-cfg input{flex:1; min-width:160px; font-family:monospace; border:2px solid var(--line); border-radius:8px; padding:6px 8px; font-size:12px; background:var(--paper)}
   .oai-cfg button{padding:6px 10px; font-size:13px; flex:none}
   .oai-cfg [data-oaistate]{font-size:11px}
+  /* 同意オーバーレイ */
+  #consent-overlay{position:fixed;inset:0;background:rgba(43,38,34,.75);z-index:9999;display:none;align-items:center;justify-content:center;padding:16px}
+  #consent-overlay.show{display:flex}
+  /* オンライン対戦バー */
+  .online-bar{max-width:960px;margin:0 auto 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  #onlineToggle{flex:none;background:#dce7fb;border-color:var(--blue);font-size:13px;padding:7px 12px}
+  #onlineToggle.active{background:var(--blue);color:#fff}
+  #onlinePanel{display:none;flex:1;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  #onlinePanel.show{display:flex}
+  #roomInput{flex:1;min-width:120px;font-family:inherit;border:2px solid var(--line);border-radius:8px;padding:7px 9px;font-size:14px;background:var(--paper)}
+  #roomStatus{font-size:12px;opacity:.8;min-width:80px}
 </style>
+
+<!-- 同意ポップアップ -->
+<div id="consent-overlay">
+  <div class="sketch" style="max-width:380px;padding:24px;text-align:center">
+    <h2 style="margin:0 0 10px">👥 通信対戦について</h2>
+    <p style="font-size:13px;line-height:1.7;text-align:left;margin:0 0 14px">
+      友達と対戦する際、PartyKit（Cloudflareサービス）を通じてデータが送信されます。<br>
+      ・キャラのステータス・画像データが相手に届きます<br>
+      ・β版テスト運用です
+    </p>
+    <div style="display:flex;gap:10px">
+      <button id="consent-yes" class="primary" style="flex:1">同意して使う</button>
+      <button id="consent-no" style="flex:1">使わない</button>
+    </div>
+  </div>
+</div>
 
 <div class="wrap">
   <h1>SNSラクガキ大戦<span class="sub">RAKUGAKI ARENA</span></h1>
@@ -198,6 +225,16 @@
     <input id="oai-key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
     <button id="oai-save">保存</button>
     <span data-oaistate></span>
+  </div>
+
+  <div class="online-bar">
+    <button id="onlineToggle">👥 友達と対戦</button>
+    <div id="onlinePanel">
+      <button id="createRoom" style="flex:none;font-size:13px;padding:7px 10px">🏠 ルーム作成</button>
+      <input id="roomInput" placeholder="ルームコードを入力" autocomplete="off" spellcheck="false">
+      <button id="joinRoom" style="flex:none;font-size:13px;padding:7px 10px">🚪 参加</button>
+      <span id="roomStatus"></span>
+    </div>
   </div>
 
   <div class="viewcfg">
@@ -293,6 +330,147 @@
 
 <script>
 // ============================================================
+//  オンライン対戦（PartyKit ネイティブWebSocket）
+// ============================================================
+const PARTYKIT_HOST = 'rakugaki-arena.tatelog.partykit.dev';
+const CONSENT_KEY = 'rakugaki_consent';
+
+let onlineMode = false;
+let partySocket = null;
+let myPlayerIndex = 0;
+
+function hasConsent(){ try{ return localStorage.getItem(CONSENT_KEY)==='1'; }catch(e){ return false; } }
+function saveConsent(){ try{ localStorage.setItem(CONSENT_KEY,'1'); }catch(e){} }
+
+function showConsent(onOk){
+  if(hasConsent()){ onOk(); return; }
+  document.getElementById('consent-overlay').classList.add('show');
+  document.getElementById('consent-yes').onclick=()=>{
+    saveConsent();
+    document.getElementById('consent-overlay').classList.remove('show');
+    onOk();
+  };
+  document.getElementById('consent-no').onclick=()=>{
+    document.getElementById('consent-overlay').classList.remove('show');
+  };
+}
+
+function connectRoom(roomId){
+  if(partySocket){ partySocket.close(); partySocket=null; }
+  const st=document.getElementById('roomStatus');
+  st.textContent='接続中…';
+  const url=`wss://${PARTYKIT_HOST}/party/${roomId.toLowerCase()}`;
+  partySocket=new WebSocket(url);
+  partySocket.addEventListener('message', e=>handleOnlineMsg(JSON.parse(e.data)));
+  partySocket.addEventListener('open', ()=>{ /* connected イベントはサーバーから来る */ });
+  partySocket.addEventListener('close', ()=>{
+    st.textContent='切断';
+    onlineMode=false;
+    document.getElementById('onlineToggle').classList.remove('active');
+  });
+  partySocket.addEventListener('error', ()=>{ st.textContent='接続エラー'; });
+}
+
+function handleOnlineMsg(data){
+  const st=document.getElementById('roomStatus');
+  if(data.type==='room_full'){
+    st.textContent='満員です'; partySocket.close(); return;
+  }
+  if(data.type==='connected'){
+    myPlayerIndex=data.playerIndex;
+    onlineMode=true;
+    document.getElementById('onlineToggle').classList.add('active');
+    st.textContent=`✅ P${myPlayerIndex+1}として接続 ${data.count<2?'│ 相手待ち…':''}`;
+    // 相手スロットのUI更新
+    const oppSlot=1-myPlayerIndex;
+    document.querySelector(`[data-stats="${oppSlot}"]`).innerHTML='<p style="font-size:12px;opacity:.6">相手のスキャンを待っています</p>';
+    document.querySelector(`[data-slot="${oppSlot}"] .hint`).innerHTML='相手の画像が届きます';
+  }
+  if(data.type==='player_joined'){
+    st.textContent='✅ 相手が参加！両者画像をスキャンしてね';
+  }
+  if(data.type==='waiting_opponent'){
+    st.textContent='📡 送信完了 │ 相手のスキャンを待っています…';
+  }
+  if(data.type==='battle_start'){
+    myPlayerIndex=data.you;
+    const oppData=myPlayerIndex===0?data.p2:data.p1;
+    const oppSlot=1-myPlayerIndex;
+    const oppImg=new Image();
+    oppImg.crossOrigin='anonymous';
+    oppImg.onload=()=>{
+      fighters[oppSlot]={img:oppImg, stats:oppData.stats};
+      const drop=document.querySelector(`[data-slot="${oppSlot}"]`);
+      drop.classList.add('filled'); drop.querySelector('img').src=oppImg.src;
+      renderStats(oppSlot);
+      document.getElementById('startBtn').disabled=!(fighters[0]&&fighters[1]);
+      st.textContent='✅ 準備完了！バトル開始を押してね';
+    };
+    oppImg.onerror=()=>{
+      fighters[oppSlot]={img:new Image(), stats:oppData.stats};
+      renderStats(oppSlot);
+      document.getElementById('startBtn').disabled=!(fighters[0]&&fighters[1]);
+      st.textContent='✅ 準備完了！バトル開始を押してね';
+    };
+    oppImg.src=oppData.imgSrc;
+  }
+  if(data.type==='resolve'){
+    const m0=data.p1.move, m1=data.p2.move;
+    const myFD=(myPlayerIndex===0?data.p1:data.p2).feintDeclared;
+    resolve(m0, m1, myFD||null);
+  }
+  if(data.type==='waiting_move'){
+    const logEl=document.getElementById('log');
+    const p=document.createElement('p'); p.textContent='⏳ 相手の手を待っています…'; logEl.appendChild(p); logEl.scrollTop=logEl.scrollHeight;
+  }
+  if(data.type==='player_left'){
+    const logEl=document.getElementById('log');
+    const p=document.createElement('p'); p.className='win'; p.textContent='🚨 相手が切断しました'; logEl.appendChild(p);
+    onlineMode=false;
+    st.textContent='相手が切断';
+  }
+}
+
+function sendOnlineMove(move, feintDeclared){
+  if(!partySocket||!onlineMode) return;
+  partySocket.send(JSON.stringify({type:'move', move, feintDeclared:feintDeclared??null}));
+}
+
+function sendOnlineJoin(slot){
+  if(!onlineMode||!partySocket) return;
+  if(slot!==myPlayerIndex) return;
+  const f=fighters[slot]; if(!f) return;
+  partySocket.send(JSON.stringify({type:'join', stats:f.stats, imgSrc:f.img.src}));
+  document.getElementById('roomStatus').textContent='📡 データ送信中…';
+}
+
+// オンライン切り替えボタン
+document.getElementById('onlineToggle').onclick=()=>{
+  if(onlineMode){
+    if(partySocket) partySocket.close();
+    onlineMode=false;
+    document.getElementById('onlineToggle').classList.remove('active');
+    document.getElementById('onlinePanel').classList.remove('show');
+    document.getElementById('roomStatus').textContent='';
+    return;
+  }
+  document.getElementById('onlinePanel').classList.toggle('show');
+};
+document.getElementById('createRoom').onclick=()=>{
+  showConsent(()=>{
+    const id=Math.random().toString(36).slice(2,8).toUpperCase();
+    document.getElementById('roomInput').value=id;
+    connectRoom(id);
+  });
+};
+document.getElementById('joinRoom').onclick=()=>{
+  const id=(document.getElementById('roomInput').value||'').trim();
+  if(!id) return;
+  showConsent(()=>connectRoom(id));
+};
+document.getElementById('roomInput').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('joinRoom').click(); });
+
+// ============================================================
 //  画像 → ステータス変換エンジン（決定論的：同じ画像＝同じ数値）
 // ============================================================
 const cv = document.getElementById('cv');
@@ -385,6 +563,7 @@ function loadImage(slot, src, cors){
     renderStats(slot);
     document.getElementById('startBtn').disabled = !(fighters[0]&&fighters[1]);
     if(slot===0) buildP1Preview(img);   // P1は3D化プレビューを表示
+    sendOnlineJoin(slot);               // オンラインモード時にstatsを送信
   };
   img.onerror=()=>alert('画像の読み込みに失敗しました。');
   img.src=src;
@@ -751,6 +930,8 @@ function resolve(m0, m1, feintDeclared=null){
     if(feintDeclared) narrateCtx=`フェイント読まれた！${b.tag}が見切り反撃！${narrateCtx}`;
   }
   refresh();
+  // オンラインモード：次のターンのために操作を再開
+  if(onlineMode && !state.over) document.getElementById('hands').style.pointerEvents='auto';
   const dead=state.u.filter(u=>u.hp<=0);
   if(dead.length){
     state.over=true; document.getElementById('hands').style.pointerEvents='none';
@@ -768,27 +949,37 @@ document.querySelectorAll('.hand').forEach(btn=>{
   btn.onclick=()=>{
     if(!state||state.over) return;
     const move=btn.dataset.move;
-    if(feint.step===1){
-      // フェイント宣言手を記録
-      feint.declared=move;
-      feint.step=2;
-      feint.used++;
-      updateFeintUI();
-      log(`🃏 ${state.u[0].tag}：<b>${MOVE_JP[move]}</b> を出す構え…（フェイント！）`,'');
-    } else if(feint.step===2){
-      // 実際の手でresolve
-      const declared=feint.declared;
-      feint.step=0; feint.declared=null;
-      const cpuM=cpuMoveVsFeint(state.u[1], declared);
-      // CPUが宣言手を読んだかどうかを演出
-      if(BEATS[declared]===cpuM){
-        log(`　CPUは読んでいた！${MOVE_JP[cpuM]} で構える…`,'');
-      }else{
-        log(`　CPUはフェイントに引っかかった！${MOVE_JP[cpuM]} を選んだ`,'');
+    if(onlineMode){
+      // オンラインモード：手をサーバーに送ってresolveを待つ
+      if(feint.step===1){
+        feint.declared=move; feint.step=2; feint.used++;
+        updateFeintUI();
+        log(`🃏 ${state.u[myPlayerIndex].tag}：<b>${MOVE_JP[move]}</b> を出す構え…（フェイント！）`,'');
+      } else if(feint.step===2){
+        const declared=feint.declared;
+        feint.step=0; feint.declared=null;
+        sendOnlineMove(move, declared);
+        document.getElementById('hands').style.pointerEvents='none';
+      } else {
+        sendOnlineMove(move, null);
+        document.getElementById('hands').style.pointerEvents='none';
       }
-      resolve(move, cpuM, declared);
     } else {
-      resolve(move, cpuMove(state.u[1]));
+      // CPUモード（既存ロジック）
+      if(feint.step===1){
+        feint.declared=move; feint.step=2; feint.used++;
+        updateFeintUI();
+        log(`🃏 ${state.u[0].tag}：<b>${MOVE_JP[move]}</b> を出す構え…（フェイント！）`,'');
+      } else if(feint.step===2){
+        const declared=feint.declared;
+        feint.step=0; feint.declared=null;
+        const cpuM=cpuMoveVsFeint(state.u[1], declared);
+        if(BEATS[declared]===cpuM){ log(`　CPUは読んでいた！${MOVE_JP[cpuM]} で構える…`,''); }
+        else{ log(`　CPUはフェイントに引っかかった！${MOVE_JP[cpuM]} を選んだ`,''); }
+        resolve(move, cpuM, declared);
+      } else {
+        resolve(move, cpuMove(state.u[1]));
+      }
     }
   };
 });
