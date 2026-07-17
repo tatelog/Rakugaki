@@ -328,16 +328,17 @@
   <canvas class="canv" id="cv" width="72" height="72"></canvas>
 </div>
 
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" integrity="sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR" crossorigin="anonymous"></script>
 <script>
 // ============================================================
-//  オンライン対戦（PartyKit ネイティブWebSocket）
+//  オンライン対戦（WebRTC P2P via PeerJS）
 // ============================================================
-const PARTYKIT_HOST = 'rakugaki-arena.tatelog.partykit.dev';
 const CONSENT_KEY = 'rakugaki_consent';
 
 let onlineMode = false;
-let partySocket = null;
-let myPlayerIndex = 0;
+let myPeer = null;      // Peer インスタンス（ホスト/ゲスト共通）
+let dataConn = null;    // DataConnection
+let myPlayerIndex = 0;  // 0=ホスト(P1), 1=ゲスト(P2)
 
 function hasConsent(){ try{ return localStorage.getItem(CONSENT_KEY)==='1'; }catch(e){ return false; } }
 function saveConsent(){ try{ localStorage.setItem(CONSENT_KEY,'1'); }catch(e){} }
@@ -355,120 +356,133 @@ function showConsent(onOk){
   };
 }
 
-function connectRoom(roomId){
-  if(partySocket){ partySocket.close(); partySocket=null; }
-  const st=document.getElementById('roomStatus');
-  st.textContent='接続中…';
-  const url=`wss://${PARTYKIT_HOST}/party/${roomId.toLowerCase()}`;
-  partySocket=new WebSocket(url);
-  partySocket.addEventListener('message', e=>handleOnlineMsg(JSON.parse(e.data)));
-  partySocket.addEventListener('open', ()=>{ /* connected イベントはサーバーから来る */ });
-  partySocket.addEventListener('close', ()=>{
-    st.textContent='切断';
+function setRoomStatus(txt){ document.getElementById('roomStatus').textContent=txt; }
+
+function onConnEstablished(conn, isHost){
+  dataConn=conn; onlineMode=true;
+  myPlayerIndex=isHost?0:1;
+  document.getElementById('onlineToggle').classList.add('active');
+  setRoomStatus(`✅ P${myPlayerIndex+1}として接続 │ 両者画像をスキャンしてね`);
+  const oppSlot=1-myPlayerIndex;
+  document.querySelector(`[data-stats="${oppSlot}"]`).innerHTML='<p style="font-size:12px;opacity:.6">相手のスキャンを待っています</p>';
+  document.querySelector(`[data-slot="${oppSlot}"] .hint`).innerHTML='相手の画像が届きます';
+
+  conn.on('data', d=>handleOnlineMsg(d));
+  conn.on('close', ()=>{
     onlineMode=false;
     document.getElementById('onlineToggle').classList.remove('active');
+    setRoomStatus('相手が切断');
+    const p=document.createElement('p'); p.className='win'; p.textContent='🚨 相手が切断しました';
+    document.getElementById('log').appendChild(p);
   });
-  partySocket.addEventListener('error', ()=>{ st.textContent='接続エラー'; });
+
+  // 既に画像スキャン済みなら送信
+  if(fighters[myPlayerIndex]) sendOnlineJoin(myPlayerIndex);
+}
+
+function createRoom(){
+  showConsent(()=>{
+    if(myPeer){ myPeer.destroy(); myPeer=null; }
+    setRoomStatus('ルーム作成中…');
+    myPeer=new Peer();
+    myPeer.on('open', id=>{
+      document.getElementById('roomInput').value=id;
+      setRoomStatus('✅ ルーム作成！IDをコピーして友達に送って');
+    });
+    myPeer.on('connection', conn=>{
+      setRoomStatus('📡 相手が接続！');
+      conn.on('open', ()=>onConnEstablished(conn, true));
+    });
+    myPeer.on('error', e=>setRoomStatus('エラー：'+e.type));
+  });
+}
+
+function joinRoom(){
+  const id=(document.getElementById('roomInput').value||'').trim();
+  if(!id){ setRoomStatus('IDを入力してね'); return; }
+  showConsent(()=>{
+    if(myPeer){ myPeer.destroy(); myPeer=null; }
+    setRoomStatus('接続中…');
+    myPeer=new Peer();
+    myPeer.on('open', ()=>{
+      const conn=myPeer.connect(id, {reliable:true, serialization:'json'});
+      conn.on('open', ()=>onConnEstablished(conn, false));
+      conn.on('error', e=>setRoomStatus('接続エラー：'+e));
+    });
+    myPeer.on('error', e=>setRoomStatus('エラー：'+e.type));
+  });
 }
 
 function handleOnlineMsg(data){
-  const st=document.getElementById('roomStatus');
-  if(data.type==='room_full'){
-    st.textContent='満員です'; partySocket.close(); return;
-  }
-  if(data.type==='connected'){
-    myPlayerIndex=data.playerIndex;
-    onlineMode=true;
-    document.getElementById('onlineToggle').classList.add('active');
-    st.textContent=`✅ P${myPlayerIndex+1}として接続 ${data.count<2?'│ 相手待ち…':''}`;
-    // 相手スロットのUI更新
-    const oppSlot=1-myPlayerIndex;
-    document.querySelector(`[data-stats="${oppSlot}"]`).innerHTML='<p style="font-size:12px;opacity:.6">相手のスキャンを待っています</p>';
-    document.querySelector(`[data-slot="${oppSlot}"] .hint`).innerHTML='相手の画像が届きます';
-  }
-  if(data.type==='player_joined'){
-    st.textContent='✅ 相手が参加！両者画像をスキャンしてね';
-  }
-  if(data.type==='waiting_opponent'){
-    st.textContent='📡 送信完了 │ 相手のスキャンを待っています…';
-  }
-  if(data.type==='battle_start'){
-    myPlayerIndex=data.you;
-    const oppData=myPlayerIndex===0?data.p2:data.p1;
+  if(data.type==='join'){
     const oppSlot=1-myPlayerIndex;
     const oppImg=new Image();
-    oppImg.crossOrigin='anonymous';
     oppImg.onload=()=>{
-      fighters[oppSlot]={img:oppImg, stats:oppData.stats};
+      fighters[oppSlot]={img:oppImg, stats:data.stats};
       const drop=document.querySelector(`[data-slot="${oppSlot}"]`);
       drop.classList.add('filled'); drop.querySelector('img').src=oppImg.src;
       renderStats(oppSlot);
       document.getElementById('startBtn').disabled=!(fighters[0]&&fighters[1]);
-      st.textContent='✅ 準備完了！バトル開始を押してね';
+      setRoomStatus('✅ 準備完了！バトル開始を押してね');
     };
     oppImg.onerror=()=>{
-      fighters[oppSlot]={img:new Image(), stats:oppData.stats};
+      fighters[oppSlot]={img:new Image(), stats:data.stats};
       renderStats(oppSlot);
       document.getElementById('startBtn').disabled=!(fighters[0]&&fighters[1]);
-      st.textContent='✅ 準備完了！バトル開始を押してね';
+      setRoomStatus('✅ 準備完了！バトル開始を押してね');
     };
-    oppImg.src=oppData.imgSrc;
+    oppImg.src=data.imgSrc;
   }
-  if(data.type==='resolve'){
-    const m0=data.p1.move, m1=data.p2.move;
-    const myFD=(myPlayerIndex===0?data.p1:data.p2).feintDeclared;
-    resolve(m0, m1, myFD||null);
+  if(data.type==='move'){
+    // 相手の手が届いた→両者の手が揃ったのでresolve
+    pendingOpponentMove={move:data.move, feintDeclared:data.feintDeclared??null};
+    tryOnlineResolve();
   }
-  if(data.type==='waiting_move'){
-    const logEl=document.getElementById('log');
-    const p=document.createElement('p'); p.textContent='⏳ 相手の手を待っています…'; logEl.appendChild(p); logEl.scrollTop=logEl.scrollHeight;
-  }
-  if(data.type==='player_left'){
-    const logEl=document.getElementById('log');
-    const p=document.createElement('p'); p.className='win'; p.textContent='🚨 相手が切断しました'; logEl.appendChild(p);
-    onlineMode=false;
-    st.textContent='相手が切断';
-  }
+}
+
+let pendingMyMove=null, pendingOpponentMove=null;
+function tryOnlineResolve(){
+  if(!pendingMyMove||!pendingOpponentMove) return;
+  const my=pendingMyMove, opp=pendingOpponentMove;
+  pendingMyMove=null; pendingOpponentMove=null;
+  const m0=myPlayerIndex===0?my.move:opp.move;
+  const m1=myPlayerIndex===0?opp.move:my.move;
+  const myFD=my.feintDeclared;
+  document.getElementById('hands').style.pointerEvents='auto';
+  resolve(m0, m1, myFD||null);
 }
 
 function sendOnlineMove(move, feintDeclared){
-  if(!partySocket||!onlineMode) return;
-  partySocket.send(JSON.stringify({type:'move', move, feintDeclared:feintDeclared??null}));
+  if(!dataConn||!onlineMode) return;
+  pendingMyMove={move, feintDeclared:feintDeclared??null};
+  dataConn.send({type:'move', move, feintDeclared:feintDeclared??null});
+  const p=document.createElement('p'); p.textContent='⏳ 相手の手を待っています…';
+  document.getElementById('log').appendChild(p); document.getElementById('log').scrollTop=9999;
 }
 
 function sendOnlineJoin(slot){
-  if(!onlineMode||!partySocket) return;
+  if(!onlineMode||!dataConn) return;
   if(slot!==myPlayerIndex) return;
   const f=fighters[slot]; if(!f) return;
-  partySocket.send(JSON.stringify({type:'join', stats:f.stats, imgSrc:f.img.src}));
-  document.getElementById('roomStatus').textContent='📡 データ送信中…';
+  dataConn.send({type:'join', stats:f.stats, imgSrc:f.img.src});
+  setRoomStatus('📡 データ送信中…');
 }
 
-// オンライン切り替えボタン
+// ボタンイベント
 document.getElementById('onlineToggle').onclick=()=>{
   if(onlineMode){
-    if(partySocket) partySocket.close();
-    onlineMode=false;
+    if(myPeer){ myPeer.destroy(); myPeer=null; }
+    dataConn=null; onlineMode=false;
     document.getElementById('onlineToggle').classList.remove('active');
     document.getElementById('onlinePanel').classList.remove('show');
-    document.getElementById('roomStatus').textContent='';
+    setRoomStatus('');
     return;
   }
   document.getElementById('onlinePanel').classList.toggle('show');
 };
-document.getElementById('createRoom').onclick=()=>{
-  showConsent(()=>{
-    const id=Math.random().toString(36).slice(2,8).toUpperCase();
-    document.getElementById('roomInput').value=id;
-    connectRoom(id);
-  });
-};
-document.getElementById('joinRoom').onclick=()=>{
-  const id=(document.getElementById('roomInput').value||'').trim();
-  if(!id) return;
-  showConsent(()=>connectRoom(id));
-};
-document.getElementById('roomInput').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('joinRoom').click(); });
+document.getElementById('createRoom').onclick=createRoom;
+document.getElementById('joinRoom').onclick=joinRoom;
+document.getElementById('roomInput').addEventListener('keydown',e=>{ if(e.key==='Enter') joinRoom(); });
 
 // ============================================================
 //  画像 → ステータス変換エンジン（決定論的：同じ画像＝同じ数値）
